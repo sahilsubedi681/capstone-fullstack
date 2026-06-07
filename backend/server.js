@@ -8,9 +8,14 @@ import userRoutes from "./routes/users.js"
 import listingRoutes from "./routes/listings.js"
 
 const app = express()
-
 app.use(cors())
-app.use(express.json())
+
+app.use((req, res, next) => {
+  if (req.headers["content-type"]?.startsWith("multipart/form-data")) {
+    return next() // skip — multer in users.js handles this
+  }
+  express.json()(req, res, next)
+})
 
 app.get("/", (req, res) => {
   res.send("Backend server is running")

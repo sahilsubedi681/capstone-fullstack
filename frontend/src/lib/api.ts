@@ -13,12 +13,14 @@ async function getToken(): Promise<string | null> {
 // Base fetch function
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const token = await getToken()
+  const isFormData = options.body instanceof FormData
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+ const headers: Record<string, string> = {
+    // Only set Content-Type for JSON — let the browser set it for FormData
+    // (browser auto-adds multipart/form-data with the correct boundary)
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(options.headers as Record<string, string>),
   }
-
   if (token) {
     headers["Authorization"] = `Bearer ${token}`
   }
@@ -89,4 +91,44 @@ export const usersApi = {
 
   // Get all users (admin only)
   getAll: () => apiFetch("/users/all"),
+}
+
+
+export const verificationApi = {
+  submit: (data: {
+    idType: string
+    idNumber: string
+    dateOfBirth: string
+    phone: string
+    address: string
+    idPhoto: File
+  }) => {
+    const formData = new FormData()
+    formData.append("idType", data.idType)
+    formData.append("idNumber", data.idNumber)
+    formData.append("dateOfBirth", data.dateOfBirth)
+    formData.append("phone", data.phone)
+    formData.append("address", data.address)
+    formData.append("idPhoto", data.idPhoto)
+
+    return apiFetch("/users/verify", {
+      method: "POST",
+      body: formData,
+      // Do NOT set Content-Type — browser sets it with boundary automatically
+    })
+  },
+
+  getStatus: () => apiFetch("/users/verify/status"),
+
+  getAll: () => apiFetch("/users/verify/all"),
+
+  approve: (uid: string) => apiFetch(`/users/verify/${uid}`, {
+    method: "PUT",
+    body: JSON.stringify({ status: "approved" }),
+  }),
+
+  reject: (uid: string) => apiFetch(`/users/verify/${uid}`, {
+    method: "PUT",
+    body: JSON.stringify({ status: "rejected" }),
+  }),
 }

@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { listingsApi } from "@/lib/api"
+import { listingsApi, verificationApi } from "@/lib/api"
 import { Loader2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import {
@@ -54,106 +54,296 @@ export default function DashboardPage() {
 }
 
 function StatsBar({ user }: { user: UserProfile }) {
-  const [stats, setStats] = useState<{ profileCompletionPercent: number; messageCount: number; profileViews: number } | null>(null);
+  const [stats, setStats] = useState<{ profileCompletionPercent: number } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [verifying, setVerifying] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<"pending" | "rejected" | null>(null);
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [verifyForm, setVerifyForm] = useState({
+    idType: "",
+    idNumber: "",
+    dateOfBirth: "",
+    phone: "",
+    address: "",
+  });
+  const [idPhoto, setIdPhoto] = useState<File | null>(null);
+  const [idPhotoPreview, setIdPhotoPreview] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    getDashboardStats(user.uid, user.role).then((s) => { setStats(s); setLoading(false); });
-  }, [user.uid, user.role]);
+    Promise.all([
+      getDashboardStats(user.uid, user.role),
+      !user.verified ? verificationApi.getStatus().catch(() => null) : Promise.resolve(null),
+    ]).then(([s, v]) => {
+      setStats(s);
+      if (v?.status) setVerificationStatus(v.status);
+      setLoading(false);
+    });
+  }, [user.uid, user.role, user.verified]);
 
-  const handleVerification = async () => {
-    setVerifying(true);
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Please upload an image under 5MB.", variant: "destructive" });
+      return;
+    }
+    setIdPhoto(file);
+    setIdPhotoPreview(URL.createObjectURL(file));
+  };
+
+  const handleVerifySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!idPhoto) {
+      toast({ title: "ID photo required", description: "Please upload a photo of your ID.", variant: "destructive" });
+      return;
+    }
+    setSubmitting(true);
     try {
-      await updateUserVerification(user.uid, !user.verified);
+      await verificationApi.submit({ ...verifyForm, idPhoto });
+      setVerificationStatus("pending");
       toast({
-        title: user.verified ? "Verification removed" : "Profile verified!",
-        description: user.verified ? "Your profile is no longer verified." : "Your profile has been marked as verified.",
+        title: "Verification request submitted!",
+        description: "Our admin team will review your profile within 1–2 business days.",
       });
-    } catch (error) {
-      toast({
-        title: "Failed to update verification",
-        description: "Please try again.",
-        variant: "destructive",
-      });
+      setShowVerifyModal(false);
+      setIdPhoto(null);
+      setIdPhotoPreview(null);
+    } catch {
+      toast({ title: "Failed to submit", description: "Please try again.", variant: "destructive" });
     } finally {
-      setVerifying(false);
+      setSubmitting(false);
     }
   };
 
+  const statusConfig = user.verified
+    ? {
+        icon: "text-green-600",
+        iconBg: "bg-green-500/20",
+        cardExtra: "border-green-500/30 bg-green-500/5",
+        label: "Verified",
+        sub: <p className="text-sm text-green-600 font-medium">Your profile has been verified by our team.</p>,
+      }
+    : verificationStatus === "pending"
+    ? {
+        icon: "text-amber-500",
+        iconBg: "bg-amber-500/20",
+        cardExtra: "border-amber-500/30 bg-amber-500/5",
+        label: "Pending Review",
+        sub: <p className="text-sm text-amber-600 font-medium">Your request is being reviewed. We'll update you within 1–2 business days.</p>,
+      }
+    : verificationStatus === "rejected"
+    ? {
+        icon: "text-red-500",
+        iconBg: "bg-red-500/20",
+        cardExtra: "border-red-500/30 bg-red-500/5",
+        label: "Verification Failed",
+        sub: (
+          <div className="space-y-2">
+            <p className="text-sm text-red-600 font-medium">Your request was not approved. Please resubmit with correct details.</p>
+            <Button size="sm" className="rounded-lg" onClick={() => setShowVerifyModal(true)}>Resubmit Verification</Button>
+          </div>
+        ),
+      }
+    : {
+        icon: "text-muted-foreground",
+        iconBg: "bg-muted",
+        cardExtra: "",
+        label: "Not Verified",
+        sub: <Button size="sm" className="rounded-lg" onClick={() => setShowVerifyModal(true)}>Verify My Profile</Button>,
+      };
+
   if (loading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-32 rounded-2xl" />)}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {[1, 2].map((i) => <Skeleton key={i} className="h-32 rounded-2xl" />)}
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-      <Card className="rounded-2xl border-border/50 shadow-sm">
-        <CardContent className="p-6 flex items-center gap-6">
-          <div className="bg-primary/10 p-4 rounded-xl"><UserIcon className="h-8 w-8 text-primary" /></div>
-          <div className="flex-1">
-            <p className="text-sm font-medium text-muted-foreground mb-1">Profile Completion</p>
-            <div className="flex items-center gap-4">
-              <span data-testid="text-profile-completion" className="text-2xl font-bold">{stats?.profileCompletionPercent || 0}%</span>
-              <Progress value={stats?.profileCompletionPercent || 0} className="flex-1 h-2" />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Card className="rounded-2xl border-border/50 shadow-sm">
-        <CardContent className="p-6 flex items-center gap-6">
-          <div className="bg-secondary/20 p-4 rounded-xl"><MessageSquare className="h-8 w-8 text-secondary-foreground" /></div>
-          <div>
-            <p className="text-sm font-medium text-muted-foreground mb-1">Unread Messages</p>
-            <p data-testid="text-message-count" className="text-2xl font-bold">{stats?.messageCount || 0}</p>
-          </div>
-        </CardContent>
-      </Card>
-      <Card className="rounded-2xl border-border/50 shadow-sm">
-        <CardContent className="p-6 flex items-center gap-6">
-          <div className="bg-muted p-4 rounded-xl"><Eye className="h-8 w-8 text-foreground" /></div>
-          <div>
-            <p className="text-sm font-medium text-muted-foreground mb-1">Profile Views</p>
-            <p data-testid="text-profile-views" className="text-2xl font-bold">{stats?.profileViews || 0}</p>
-          </div>
-        </CardContent>
-      </Card>
-      <Card className={`rounded-2xl border-border/50 shadow-sm ${user.verified ? "border-green-500/30 bg-green-500/5" : ""}`}>
-        <CardContent className="p-6 flex flex-col gap-4">
-          <div className="flex items-center gap-3">
-            <div className={`p-4 rounded-xl ${user.verified ? "bg-green-500/20" : "bg-muted"}`}>
-              <svg className={`h-8 w-8 ${user.verified ? "text-green-600" : "text-muted-foreground"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    <>
+      <div className="grid grid-cols-1 md:grid-cols-1 gap-6">
+        <Card className={`rounded-2xl border-border/50 shadow-sm ${statusConfig.cardExtra}`}>
+          <CardContent className="p-6 flex items-center gap-6">
+            <div className={`p-4 rounded-xl ${statusConfig.iconBg}`}>
+              <svg className={`h-8 w-8 ${statusConfig.icon}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground mb-0.5">Profile Status</p>
-              <p className="text-lg font-bold">{user.verified ? "✓ Verified" : "Unverified"}</p>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-muted-foreground mb-1">Profile Status</p>
+              <p className="text-xl font-bold mb-2">{statusConfig.label}</p>
+              {statusConfig.sub}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {showVerifyModal && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowVerifyModal(false)}
+        >
+          <div
+            className="bg-background rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-8">
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold mb-1">
+                    {verificationStatus === "rejected" ? "Resubmit Verification" : "Verify Your Profile"}
+                  </h2>
+                  <p className="text-muted-foreground text-base">
+                    {verificationStatus === "rejected"
+                      ? "Please correct your details and resubmit. Our team will review again within 1–2 business days."
+                      : "Fill in your details below. Our admin team will review and verify your profile within 1–2 business days."}
+                  </p>
+                </div>
+                <button onClick={() => setShowVerifyModal(false)} className="text-muted-foreground hover:text-foreground ml-4">✕</button>
+              </div>
+
+              <form onSubmit={handleVerifySubmit} className="space-y-5">
+                <div className="space-y-2">
+                  <label className="text-base font-medium">ID Type</label>
+                  <select
+                    value={verifyForm.idType}
+                    onChange={(e) => setVerifyForm({ ...verifyForm, idType: e.target.value })}
+                    required
+                    className="w-full h-12 rounded-xl border border-input bg-background px-3 text-base"
+                  >
+                    <option value="">Select ID type</option>
+                    <option value="drivers_licence">Driver's Licence</option>
+                    <option value="passport">Passport</option>
+                    <option value="medicare">Medicare Card</option>
+                    <option value="seniors_card">Seniors Card</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-base font-medium">ID Number</label>
+                  <Input
+                    placeholder="Enter your ID number"
+                    value={verifyForm.idNumber}
+                    onChange={(e) => setVerifyForm({ ...verifyForm, idNumber: e.target.value })}
+                    required
+                    className="h-12 rounded-xl"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-base font-medium">Date of Birth</label>
+                  <Input
+                    type="date"
+                    value={verifyForm.dateOfBirth}
+                    onChange={(e) => setVerifyForm({ ...verifyForm, dateOfBirth: e.target.value })}
+                    required
+                    className="h-12 rounded-xl"
+                  />
+                  <p className="text-sm text-muted-foreground">You must be 55 or above to use TribeSilverCircle.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-base font-medium">Phone Number</label>
+                  <Input
+                    type="tel"
+                    placeholder="E.g. 0412 345 678"
+                    value={verifyForm.phone}
+                    onChange={(e) => setVerifyForm({ ...verifyForm, phone: e.target.value })}
+                    required
+                    className="h-12 rounded-xl"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-base font-medium">Home Address</label>
+                  <Input
+                    placeholder="E.g. 12 Example Street, Brighton VIC"
+                    value={verifyForm.address}
+                    onChange={(e) => setVerifyForm({ ...verifyForm, address: e.target.value })}
+                    required
+                    className="h-12 rounded-xl"
+                  />
+                </div>
+
+                {/* ID Photo Upload */}
+                <div className="space-y-2">
+                  <label className="text-base font-medium">
+                    Photo of Your ID <span className="text-red-500">*</span>
+                  </label>
+                  <p className="text-sm text-muted-foreground">
+                    Take a clear photo of your {verifyForm.idType ? verifyForm.idType.replace("_", " ") : "selected ID"} showing your name and details.
+                  </p>
+
+                  {/* Upload area */}
+                  <label
+                    htmlFor="id-photo-upload"
+                    className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${
+                      idPhotoPreview
+                        ? "border-primary/50 bg-primary/5"
+                        : "border-border hover:border-primary/50 hover:bg-muted/30"
+                    }`}
+                  >
+                    {idPhotoPreview ? (
+                      <div className="relative w-full h-full">
+                        <img
+                          src={idPhotoPreview}
+                          alt="ID preview"
+                          className="w-full h-full object-contain rounded-xl p-1"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity bg-black/40 rounded-xl">
+                          <p className="text-white text-sm font-medium">Click to change</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                        <svg className="h-10 w-10 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                            d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                        </svg>
+                        <p className="text-sm font-medium">Click to upload ID photo</p>
+                        <p className="text-xs">JPG, PNG or HEIC — max 5MB</p>
+                      </div>
+                    )}
+                    <input
+                      id="id-photo-upload"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handlePhotoChange}
+                    />
+                  </label>
+
+                  {idPhoto && (
+                    <div className="flex items-center justify-between px-3 py-2 bg-muted/30 rounded-lg text-sm">
+                      <span className="text-muted-foreground truncate">{idPhoto.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => { setIdPhoto(null); setIdPhotoPreview(null); }}
+                        className="text-muted-foreground hover:text-destructive ml-2 shrink-0"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 bg-muted/30 rounded-xl text-sm text-muted-foreground">
+                  Your information is kept private and secure. It will only be used to verify your age and identity. We will never share your details with third parties.
+                </div>
+
+                <Button type="submit" className="w-full h-14 text-lg rounded-xl" disabled={submitting}>
+                  {submitting && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
+                  {verificationStatus === "rejected" ? "Resubmit Verification Request" : "Submit Verification Request"}
+                </Button>
+              </form>
             </div>
           </div>
-          <Button
-            size="sm"
-            variant={user.verified ? "outline" : "default"}
-            className="w-full rounded-lg"
-            onClick={handleVerification}
-            disabled={verifying}
-          >
-            {verifying ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Updating...
-              </>
-            ) : (
-              user.verified ? "Unverify Profile" : "Verify Profile"
-            )}
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -191,36 +381,50 @@ function HostDashboard({ user }: { user: UserProfile }) {
     })
   }, [user.uid])
 
-  const handleCreateListing = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setSaving(true)
-    try {
+const handleCreateListing = async (e: React.FormEvent) => {
+  e.preventDefault()
+  setSaving(true)
+  try {
+    if (editingId) {
+      await listingsApi.update(editingId, {
+        ...form,
+        rentPerWeek: Number(form.rentPerWeek),
+      })
+      setListings(listings.map((l) =>
+        l.id === editingId
+          ? { ...l, ...form, rentPerWeek: Number(form.rentPerWeek) }
+          : l
+      ))
+      toast({ title: "Listing updated!", description: "Your room details have been saved." })
+    } else {
       const newListing = await listingsApi.create({
         ...form,
         rentPerWeek: Number(form.rentPerWeek),
       })
       setListings([...listings, newListing])
-      setShowForm(false)
-      setEditingId(null)
-      setForm({
-        suburb: "",
-        state: "",
-        roomSize: "single",
-        rentPerWeek: "",
-        billsIncluded: false,
-        bathroomType: "shared",
-        furnished: false,
-        availableFrom: "",
-        houseRules: "",
-        spareRooms: 1,
-      })
       toast({ title: "Listing created!", description: "Your room is now live on TribeSilverCircle." })
-    } catch (error) {
-      toast({ title: "Failed to create listing", description: "Please try again.", variant: "destructive" })
-    } finally {
-      setSaving(false)
     }
+
+    setShowForm(false)
+    setEditingId(null)
+    setForm({
+      suburb: "",
+      state: "",
+      roomSize: "single",
+      rentPerWeek: "",
+      billsIncluded: false,
+      bathroomType: "shared",
+      furnished: false,
+      availableFrom: "",
+      houseRules: "",
+      spareRooms: 1,
+    })
+  } catch {
+    toast({ title: "Failed to save listing", description: "Please try again.", variant: "destructive" })
+  } finally {
+    setSaving(false)
   }
+}
 
   return (
     <div className="grid lg:grid-cols-3 gap-8">
@@ -273,9 +477,43 @@ function HostDashboard({ user }: { user: UserProfile }) {
                   </div>
                   {listing.houseRules && <p className="text-sm text-foreground mb-4 line-clamp-2">{listing.houseRules}</p>}
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => { setShowForm(true); setEditingId(listing.id) }}>Edit</Button>
-                    <Button variant="outline" size="sm" className="text-destructive">Delete</Button>
-                  </div>
+<Button
+  variant="outline"
+  size="sm"
+  onClick={() => {
+    setForm({
+      suburb: listing.suburb,
+      state: listing.state,
+      roomSize: listing.roomSize,
+      rentPerWeek: String(listing.rentPerWeek),
+      billsIncluded: listing.billsIncluded,
+      bathroomType: listing.bathroomType,
+      furnished: listing.furnished,
+      availableFrom: listing.availableFrom || "",
+      houseRules: listing.houseRules || "",
+      spareRooms: listing.spareRooms || 1,
+    })
+    setEditingId(listing.id)
+    setShowForm(true)
+  }}
+>
+  Edit
+</Button><Button
+  variant="outline"
+  size="sm"
+  className="text-destructive"
+  onClick={async () => {
+    try {
+      await listingsApi.delete(listing.id)
+      setListings(listings.filter((l) => l.id !== listing.id))
+      toast({ title: "Listing deleted successfully" })
+    } catch {
+      toast({ title: "Failed to delete", variant: "destructive" })
+    }
+  }}
+>
+  Delete
+</Button>                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -458,25 +696,19 @@ function HostDashboard({ user }: { user: UserProfile }) {
       </div>
 
       <div className="space-y-8">
-        <Card className="rounded-2xl border-primary/20 bg-primary/5 shadow-sm">
-          <CardHeader><CardTitle className="text-xl">Host Tips</CardTitle></CardHeader>
-          <CardContent className="space-y-4">
-            {[
-              "Complete your profile fully to build trust with potential housemates.",
-              "Upload bright, clear photos of the room and common areas.",
-              "Be clear about your house rules from the very beginning.",
-            ].map((tip, i) => (
-              <div key={i} className="flex gap-3">
-                <div className="bg-primary/20 text-primary rounded-full p-1 shrink-0 h-fit mt-0.5">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                </div>
-                <p className="text-sm">{tip}</p>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+       <Card className="rounded-2xl border-border/50 shadow-sm">
+  <CardHeader><CardTitle className="text-xl">Quick Actions</CardTitle></CardHeader>
+  <CardContent className="space-y-3">
+    <Button
+      variant="outline"
+      className="w-full rounded-xl justify-start"
+      onClick={() => window.location.href = "/profile-setup"}
+    >
+      <UserIcon className="mr-2 h-4 w-4" />
+      Edit Profile
+    </Button>
+  </CardContent>
+</Card>
       </div>
 
       {/* Seeker Profile Modal */}

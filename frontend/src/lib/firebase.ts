@@ -45,4 +45,6 @@ const signInWithGoogle = async () => {
   }
 };
 
+
+
 export { auth, db, signInWithGoogle, googleProvider };
