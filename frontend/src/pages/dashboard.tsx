@@ -21,9 +21,15 @@ import {
   getSavedListings,
   expressInterest,
   updateUserVerification,
+  getHostStats,
+  getListingsByLocation,
   type Listing,
+  type HostStats,
+  type LocationStats,
 } from "@/lib/firestore";
 import type { UserProfile } from "@/lib/auth";
+import { db } from "@/lib/firebase";
+import { query, collection, where, getDocs } from "firebase/firestore";
 import { Search, MapPin, Home, User as UserIcon, MessageSquare, Eye, Heart } from "lucide-react";
 
 export default function DashboardPage() {
@@ -355,6 +361,10 @@ function HostDashboard({ user }: { user: UserProfile }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [selectedSeeker, setSelectedSeeker] = useState<UserProfile | null>(null)
+  const [photos, setPhotos] = useState<File[]>([])
+  const [photoPreviews, setPhotoPreviews] = useState<string[]>([])
+  const [hostStats, setHostStats] = useState<HostStats | null>(null)
+  const [locationStats, setLocationStats] = useState<LocationStats[]>([])
   const { toast } = useToast()
 
   const [form, setForm] = useState({
@@ -374,9 +384,13 @@ function HostDashboard({ user }: { user: UserProfile }) {
     Promise.all([
       listingsApi.getMine().catch(() => []),
       getInterestedSeekers(user.uid),
-    ]).then(([l, s]) => {
+      getHostStats(user.uid),
+      getListingsByLocation(user.uid),
+    ]).then(([l, s, stats, locStats]) => {
       setListings(Array.isArray(l) ? l : [])
       setSeekers(s)
+      setHostStats(stats)
+      setLocationStats(locStats)
       setLoading(false)
     })
   }, [user.uid])
@@ -389,38 +403,33 @@ const handleCreateListing = async (e: React.FormEvent) => {
       await listingsApi.update(editingId, {
         ...form,
         rentPerWeek: Number(form.rentPerWeek),
-      })
+      }, photos.length > 0 ? photos : undefined)
       setListings(listings.map((l) =>
         l.id === editingId
-          ? { ...l, ...form, rentPerWeek: Number(form.rentPerWeek) }
+          ? { ...l, ...form, roomSize: form.roomSize as "single" | "double", bathroomType: form.bathroomType as "private" | "shared", rentPerWeek: Number(form.rentPerWeek) }
           : l
       ))
-      toast({ title: "Listing updated!", description: "Your room details have been saved." })
+      toast({ title: "Listing updated!" })
     } else {
       const newListing = await listingsApi.create({
         ...form,
         rentPerWeek: Number(form.rentPerWeek),
-      })
+      }, photos)
       setListings([...listings, newListing])
-      toast({ title: "Listing created!", description: "Your room is now live on TribeSilverCircle." })
+      toast({ title: "Listing created!", description: "Your room is now live." })
     }
 
     setShowForm(false)
     setEditingId(null)
+    setPhotos([])
+    setPhotoPreviews([])
     setForm({
-      suburb: "",
-      state: "",
-      roomSize: "single",
-      rentPerWeek: "",
-      billsIncluded: false,
-      bathroomType: "shared",
-      furnished: false,
-      availableFrom: "",
-      houseRules: "",
-      spareRooms: 1,
+      suburb: "", state: "", roomSize: "single", rentPerWeek: "",
+      billsIncluded: false, bathroomType: "shared", furnished: false,
+      availableFrom: "", houseRules: "", spareRooms: 1,
     })
   } catch {
-    toast({ title: "Failed to save listing", description: "Please try again.", variant: "destructive" })
+    toast({ title: "Failed to save listing", variant: "destructive" })
   } finally {
     setSaving(false)
   }
@@ -433,6 +442,87 @@ const handleCreateListing = async (e: React.FormEvent) => {
           <h2 className="text-2xl font-bold">My Listings</h2>
           <Button onClick={() => { setShowForm(true); setEditingId(null) }}>Add New Room</Button>
         </div>
+
+        {/* Listings Status Overview */}
+        {hostStats && hostStats.total > 0 && (
+          <Card className="rounded-2xl border-border/50 shadow-md">
+            <CardHeader>
+              <CardTitle>Listings Status Overview</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-2 gap-8 items-center">
+                {/* Donut Chart */}
+                <div className="flex items-center justify-center">
+                  <div className="relative w-40 h-40">
+                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 120 120">
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r="50"
+                        fill="none"
+                        stroke="#f3f4f6"
+                        strokeWidth="15"
+                      />
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r="50"
+                        fill="none"
+                        stroke="#10b981"
+                        strokeWidth="15"
+                        strokeDasharray={`${(hostStats.active / (hostStats.active + hostStats.removed)) * 314.159} 314.159`}
+                      />
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r="50"
+                        fill="none"
+                        stroke="#ef4444"
+                        strokeWidth="15"
+                        strokeDasharray={`${(hostStats.removed / (hostStats.active + hostStats.removed)) * 314.159} 314.159`}
+                        strokeDashoffset={-((hostStats.active / (hostStats.active + hostStats.removed)) * 314.159)}
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center flex-col">
+                      <p className="text-2xl font-bold">{hostStats.active + hostStats.removed}</p>
+                      <p className="text-xs text-muted-foreground">Listings</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-green-500" />
+                      <span className="font-medium">Active</span>
+                    </div>
+                    <span className="font-bold">{hostStats.active} ({Math.round((hostStats.active / (hostStats.active + hostStats.removed)) * 100)}%)</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 bg-red-500/10 rounded-lg border border-red-500/20">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-red-500" />
+                      <span className="font-medium">Inactive</span>
+                    </div>
+                    <span className="font-bold">{hostStats.removed} ({Math.round((hostStats.removed / (hostStats.active + hostStats.removed)) * 100)}%)</span>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Australia Map by State */}
+        {locationStats.length > 0 && (
+          <Card className="rounded-2xl border-border/50 shadow-md">
+            <CardHeader>
+              <CardTitle>Your Listings by Location</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="w-full h-96 flex items-center justify-center">
+                <AustraliaMap locationStats={locationStats} />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {loading ? (
           <div className="space-y-4">
@@ -476,44 +566,97 @@ const handleCreateListing = async (e: React.FormEvent) => {
                     <div><p className="text-muted-foreground">Furnished</p><p className="font-bold">{listing.furnished ? "Yes" : "No"}</p></div>
                   </div>
                   {listing.houseRules && <p className="text-sm text-foreground mb-4 line-clamp-2">{listing.houseRules}</p>}
-                  <div className="flex gap-2">
-<Button
-  variant="outline"
-  size="sm"
-  onClick={() => {
-    setForm({
-      suburb: listing.suburb,
-      state: listing.state,
-      roomSize: listing.roomSize,
-      rentPerWeek: String(listing.rentPerWeek),
-      billsIncluded: listing.billsIncluded,
-      bathroomType: listing.bathroomType,
-      furnished: listing.furnished,
-      availableFrom: listing.availableFrom || "",
-      houseRules: listing.houseRules || "",
-      spareRooms: listing.spareRooms || 1,
-    })
-    setEditingId(listing.id)
-    setShowForm(true)
-  }}
->
-  Edit
-</Button><Button
-  variant="outline"
-  size="sm"
-  className="text-destructive"
-  onClick={async () => {
-    try {
-      await listingsApi.delete(listing.id)
-      setListings(listings.filter((l) => l.id !== listing.id))
-      toast({ title: "Listing deleted successfully" })
-    } catch {
-      toast({ title: "Failed to delete", variant: "destructive" })
-    }
-  }}
->
-  Delete
-</Button>                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setForm({
+                          suburb: listing.suburb,
+                          state: listing.state,
+                          roomSize: listing.roomSize,
+                          rentPerWeek: String(listing.rentPerWeek),
+                          billsIncluded: listing.billsIncluded,
+                          bathroomType: listing.bathroomType,
+                          furnished: listing.furnished,
+                          availableFrom: listing.availableFrom || "",
+                          houseRules: listing.houseRules || "",
+                          spareRooms: listing.spareRooms || 1,
+                        })
+                        setEditingId(listing.id)
+                        setShowForm(true)
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    {listing.status === "active" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            await listingsApi.update(listing.id, { status: "removed" })
+                            setListings(listings.map((l) =>
+                              l.id === listing.id ? { ...l, status: "removed" } : l
+                            ))
+                            setHostStats((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    active: prev.active - 1,
+                                    removed: prev.removed + 1,
+                                  }
+                                : null
+                            )
+                            toast({ title: "Room inactive", description: "Your listing has been marked as inactive." })
+                          } catch {
+                            toast({ title: "Failed to mark inactive", variant: "destructive" })
+                          }
+                        }}
+                      >
+                        Mark Inactive
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-destructive"
+                      onClick={async () => {
+                        const q = query(collection(db, "interests"), where("hostId", "==", user.uid))
+                        const snap = await getDocs(q)
+                        const hasInterest = snap.docs.some((doc) => doc.data().listingId === listing.id)
+                        
+                        if (hasInterest) {
+                          toast({
+                            title: "Cannot delete",
+                            description: "Seekers are interested in this listing. Mark it inactive instead.",
+                            variant: "destructive",
+                          })
+                          return
+                        }
+                        
+                        try {
+                          await listingsApi.delete(listing.id)
+                          setListings(listings.filter((l) => l.id !== listing.id))
+                          setHostStats((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  total: prev.total - 1,
+                                  active: listing.status === "active" ? prev.active - 1 : prev.active,
+                                  removed: listing.status === "removed" ? prev.removed - 1 : prev.removed,
+                                }
+                              : null
+                          )
+                          toast({ title: "Listing deleted successfully" })
+                        } catch {
+                          toast({ title: "Failed to delete", variant: "destructive" })
+                        }
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -640,6 +783,63 @@ const handleCreateListing = async (e: React.FormEvent) => {
                   />
                 </div>
 
+                {/* Photo Upload */}
+                <div className="space-y-2">
+                  <label className="text-base font-medium">Room Photos (up to 5)</label>
+                  <p className="text-sm text-muted-foreground">Add clear photos of the room and common areas.</p>
+
+                  <label
+                    htmlFor="room-photos"
+                    className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                  >
+                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                      <svg className="h-8 w-8 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                      </svg>
+                      <p className="text-sm font-medium">Click to upload photos</p>
+                      <p className="text-xs">JPG or PNG, max 5MB each, up to 5 photos</p>
+                    </div>
+                    <input
+                      id="room-photos"
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files || []).slice(0, 5)
+                        setPhotos(files)
+                        setPhotoPreviews(files.map((f) => URL.createObjectURL(f)))
+                      }}
+                    />
+                  </label>
+
+                  {photoPreviews.length > 0 && (
+                    <div className="grid grid-cols-3 gap-3 mt-3">
+                      {photoPreviews.map((preview, i) => (
+                        <div key={i} className="relative rounded-xl overflow-hidden h-24">
+                          <img src={preview} alt={`Room ${i + 1}`} className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPhotos(photos.filter((_, pi) => pi !== i))
+                              setPhotoPreviews(photoPreviews.filter((_, pi) => pi !== i))
+                            }}
+                            className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-black/80"
+                          >
+                            ✕
+                          </button>
+                          {i === 0 && (
+                                            <span className="absolute bottom-1 left-1 bg-primary text-primary-foreground text-xs px-2 py-0.5 rounded-full">
+                              Main
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <Button
                   type="submit"
                   className="w-full h-14 text-lg rounded-xl"
@@ -693,22 +893,6 @@ const handleCreateListing = async (e: React.FormEvent) => {
             ))}
           </div>
         )}
-      </div>
-
-      <div className="space-y-8">
-       <Card className="rounded-2xl border-border/50 shadow-sm">
-  <CardHeader><CardTitle className="text-xl">Quick Actions</CardTitle></CardHeader>
-  <CardContent className="space-y-3">
-    <Button
-      variant="outline"
-      className="w-full rounded-xl justify-start"
-      onClick={() => window.location.href = "/profile-setup"}
-    >
-      <UserIcon className="mr-2 h-4 w-4" />
-      Edit Profile
-    </Button>
-  </CardContent>
-</Card>
       </div>
 
       {/* Seeker Profile Modal */}
@@ -809,6 +993,109 @@ const handleCreateListing = async (e: React.FormEvent) => {
   )
 }
 
+// Australia Map Component
+interface AustraliaMapProps {
+  locationStats: Array<{ location: string; count: number }>;
+}
+
+function AustraliaMap({ locationStats }: AustraliaMapProps) {
+  const getColorByCount = (state: string): string => {
+    const stat = locationStats.find((s) => s.location === state);
+    const count = stat?.count || 0;
+    const maxCount = Math.max(...locationStats.map((s) => s.count), 1);
+    const ratio = count / maxCount;
+
+    if (ratio === 0) return "bg-gray-100 border-gray-300";
+    if (ratio < 0.2) return "bg-blue-100 border-blue-300";
+    if (ratio < 0.4) return "bg-blue-200 border-blue-400";
+    if (ratio < 0.6) return "bg-blue-400 border-blue-500";
+    if (ratio < 0.8) return "bg-blue-500 border-blue-600";
+    return "bg-blue-700 border-blue-800";
+  };
+
+  const getTextColor = (state: string): string => {
+    const stat = locationStats.find((s) => s.location === state);
+    const count = stat?.count || 0;
+    const maxCount = Math.max(...locationStats.map((s) => s.count), 1);
+    const ratio = count / maxCount;
+
+    if (ratio > 0.6) return "text-white";
+    return "text-gray-900";
+  };
+
+  const getCountByState = (state: string): number => {
+    return locationStats.find((s) => s.location === state)?.count || 0;
+  };
+
+  const stateMap = [
+    // Row 1 - Western & Northern
+    { name: "WA", row: 0, col: 0, span: 2 },
+    { name: "NT", row: 0, col: 2, span: 2 },
+    { name: "QLD", row: 0, col: 4, span: 2 },
+    
+    // Row 2 - SA & NSW
+    { name: "SA", row: 1, col: 1, span: 2 },
+    { name: "NSW", row: 1, col: 4, span: 2 },
+    
+    // Row 3 - VIC & ACT
+    { name: "VIC", row: 2, col: 1, span: 2 },
+    { name: "ACT", row: 2, col: 3, span: 1 },
+    
+    // Row 4 - Tasmania
+    { name: "TAS", row: 3, col: 4, span: 2 },
+  ];
+
+  return (
+    <div className="w-full space-y-6">
+      {/* Map Grid */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
+        {stateMap.map((state) => {
+          const count = getCountByState(state.name);
+          return (
+            <div
+              key={state.name}
+              className={`${getColorByCount(state.name)} border-2 rounded-lg p-4 text-center transition-all hover:shadow-lg hover:scale-105 cursor-pointer`}
+              style={{
+                gridColumn: `span ${state.span}`,
+              }}
+            >
+              <div className={`font-bold text-lg ${getTextColor(state.name)}`}>
+                {state.name}
+              </div>
+              <div className={`text-2xl font-bold mt-2 ${getTextColor(state.name)}`}>
+                {count}
+              </div>
+              <div className={`text-xs mt-1 ${getTextColor(state.name)} opacity-75`}>
+                {count === 1 ? "listing" : "listings"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div className="flex flex-wrap gap-4 justify-center text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-gray-100 border-2 border-gray-300 rounded" />
+          <span>No listings</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-blue-100 border-2 border-blue-300 rounded" />
+          <span>Few</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-blue-400 border-2 border-blue-500 rounded" />
+          <span>Some</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-blue-700 border-2 border-blue-800 rounded" />
+          <span>Many</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SeekerDashboard({ user }: { user: UserProfile }) {
   const [suburb, setSuburb] = useState("");
   const [maxRent, setMaxRent] = useState<number | undefined>();
@@ -817,16 +1104,20 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"browse" | "favourites">("browse");
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
+  const [photoIndex, setPhotoIndex] = useState(0);
   const [expressing, setExpressing] = useState<string | null>(null);
+  const [locations, setLocations] = useState<LocationStats[]>([]);
   const { toast } = useToast();
 
   useEffect(() => {
     Promise.all([
       listingsApi.getAll(),
-      getSavedListingIds(user.uid)
-    ]).then(([l, s]) => {
+      getSavedListingIds(user.uid),
+      getListingsByLocation()
+    ]).then(([l, s, loc]) => {
       setListings(l);
       setSavedIds(s);
+      setLocations(loc);
       setLoading(false);
     });
   }, [user.uid]);
@@ -842,22 +1133,27 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
   };
 
   const handleSave = async (listingId: string) => {
-    const listing = listings.find((l) => l.id === listingId);
-    if (!listing) return;
-    
-    const isSaved = await toggleSavedListing(user.uid, listingId, listing);
-    setSavedIds((prev) =>
-      isSaved ? [...prev, listingId] : prev.filter((id) => id !== listingId)
-    );
-    toast({
-      title: isSaved ? "Saved to favourites" : "Removed from favourites",
-    });
+    try {
+      const isSaved = await toggleSavedListing(user.uid, listingId);
+      setSavedIds((prev) =>
+        isSaved ? [...prev, listingId] : prev.filter((id) => id !== listingId)
+      );
+      toast({
+        title: isSaved ? "Saved to favourites" : "Removed from favourites",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Could not save listing",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleExpressInterest = async (listing: Listing) => {
     setExpressing(listing.id);
     try {
-      await expressInterest(user.uid, listing.hostId);
+      await expressInterest(user.uid, listing.hostId, listing.id);
       toast({
         title: "Interest expressed!",
         description: `${listing.hostName} has been notified. They will reach out to you soon.`,
@@ -947,6 +1243,27 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
 
           <h2 className="text-2xl font-bold">Available Rooms</h2>
 
+          {/* Popular Locations */}
+          {locations.length > 0 && (
+            <Card className="rounded-2xl border-border/50 shadow-sm">
+              <CardContent className="p-6">
+                <h3 className="font-bold mb-4">Popular Locations</h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                  {locations.slice(0, 5).map((loc) => (
+                    <button
+                      key={loc.location}
+                      onClick={() => setSuburb(loc.location.split(",")[0])}
+                      className="p-3 rounded-lg bg-muted/30 hover:bg-muted/60 transition-colors text-center"
+                    >
+                      <p className="font-semibold text-sm">{loc.location}</p>
+                      <p className="text-xs text-muted-foreground">{loc.count} rooms</p>
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {loading ? (
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
               {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -1028,13 +1345,40 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
             className="bg-background rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Image */}
-            <div className="h-56 bg-muted relative">
-              {selectedListing.photoUrl ? (
+            {/* Image Carousel */}
+            <div className="h-64 bg-muted relative group">
+              {selectedListing.photoUrls && selectedListing.photoUrls.length > 0 ? (
+                <>
+                  <img
+                    src={selectedListing.photoUrls[photoIndex]}
+                    alt={`Room photo ${photoIndex + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                  {selectedListing.photoUrls.length > 1 && (
+                    <>
+                      <button
+                        onClick={() => setPhotoIndex((prev) => (prev - 1 + selectedListing.photoUrls!.length) % selectedListing.photoUrls!.length)}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        ‹
+                      </button>
+                      <button
+                        onClick={() => setPhotoIndex((prev) => (prev + 1) % selectedListing.photoUrls!.length)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        ›
+                      </button>
+                    </>
+                  )}
+                  <div className="absolute bottom-4 left-4 bg-black/60 text-white px-3 py-1 rounded-full text-sm">
+                    {photoIndex + 1} / {selectedListing.photoUrls.length}
+                  </div>
+                </>
+              ) : selectedListing.photoUrl ? (
                 <img
                   src={selectedListing.photoUrl}
                   alt="Room"
-                  className="w-full h-full object-cover rounded-t-2xl"
+                  className="w-full h-full object-cover"
                 />
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -1042,7 +1386,10 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
                 </div>
               )}
               <button
-                onClick={() => setSelectedListing(null)}
+                onClick={() => {
+                  setSelectedListing(null);
+                  setPhotoIndex(0);
+                }}
                 className="absolute top-4 right-4 bg-background/90 rounded-full p-2 hover:bg-background transition-colors"
               >
                 ✕
@@ -1051,6 +1398,23 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
                 ${selectedListing.rentPerWeek}/wk
               </div>
             </div>
+
+            {/* Photo Thumbnails */}
+            {selectedListing.photoUrls && selectedListing.photoUrls.length > 1 && (
+              <div className="px-8 pt-4 flex gap-2 overflow-x-auto pb-2">
+                {selectedListing.photoUrls.map((photo, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setPhotoIndex(idx)}
+                    className={`h-16 w-20 rounded-lg flex-shrink-0 overflow-hidden border-2 transition-colors ${
+                      idx === photoIndex ? "border-primary" : "border-transparent opacity-60 hover:opacity-100"
+                    }`}
+                  >
+                    <img src={photo} alt={`Thumbnail ${idx + 1}`} className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="p-8 space-y-6">
               {/* Title and location */}
@@ -1182,6 +1546,11 @@ function ListingCard({
             <Home className="h-10 w-10 text-muted-foreground opacity-30" />
           </div>
         )}
+        {listing.photoUrls && listing.photoUrls.length > 0 && (
+          <div className="absolute bottom-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded-full">
+            📷 {listing.photoUrls.length} photo{listing.photoUrls.length !== 1 ? "s" : ""}
+          </div>
+        )}
         <div className="absolute top-4 right-4 bg-background/90 backdrop-blur rounded-full px-3 py-1 font-bold text-foreground shadow-sm">
           ${listing.rentPerWeek}/wk
         </div>
@@ -1203,13 +1572,15 @@ function ListingCard({
           )}
         </div>
         <div className="flex items-center gap-3 mb-4 p-3 bg-muted/30 rounded-xl">
-          <img
-            src={listing.hostPhotoUrl || `https://i.pravatar.cc/150?u=${listing.hostId}`}
-            alt="Host"
-            className="w-10 h-10 rounded-full object-cover"
-          />
+          <div className="h-10 w-10 rounded-full bg-muted overflow-hidden shrink-0">
+            <img
+              src={listing.hostPhotoUrl || `https://i.pravatar.cc/150?u=${listing.hostId}`}
+              alt={listing.hostName}
+              className="w-full h-full object-cover"
+            />
+          </div>
           <div>
-            <p className="text-sm font-medium">Hosted by {listing.hostName}</p>
+            <p className="text-sm font-medium">{listing.hostName}</p>
             <p className="text-xs text-muted-foreground">Age {listing.hostAge || "55+"}</p>
           </div>
         </div>

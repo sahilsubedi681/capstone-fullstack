@@ -41,7 +41,6 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
 // ─── Listings API ──────────────────────────────────────────────────────────────
 
 export const listingsApi = {
-  // Get all listings (public)
   getAll: (filters?: { suburb?: string; maxRent?: number }) => {
     const params = new URLSearchParams()
     if (filters?.suburb) params.append("suburb", filters.suburb)
@@ -50,33 +49,41 @@ export const listingsApi = {
     return apiFetch(`/listings${query}`)
   },
 
-  // Get my listings as host (returns array)
   getMine: async () => {
     const response = await apiFetch("/listings/host/mine")
     return response.listings || []
   },
 
-  // Get single listing
   getById: (id: string) => apiFetch(`/listings/${id}`),
 
-  // Create listing
-  create: (data: object) => apiFetch("/listings", {
-    method: "POST",
-    body: JSON.stringify(data),
-  }),
+  create: (data: Record<string, any>, photos?: File[]) => {
+    const formData = new FormData()
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        formData.append(key, String(value))
+      }
+    })
+    if (photos) {
+      photos.forEach((photo) => formData.append("photos", photo))
+    }
+    return apiFetch("/listings", { method: "POST", body: formData })
+  },
 
-  // Update listing
-  update: (id: string, data: object) => apiFetch(`/listings/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  }),
+  update: (id: string, data: Record<string, any>, photos?: File[]) => {
+    const formData = new FormData()
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        formData.append(key, String(value))
+      }
+    })
+    if (photos && photos.length > 0) {
+      photos.forEach((photo) => formData.append("photos", photo))
+    }
+    return apiFetch(`/listings/${id}`, { method: "PUT", body: formData })
+  },
 
-  // Delete listing
-  delete: (id: string) => apiFetch(`/listings/${id}`, {
-    method: "DELETE",
-  }),
+  delete: (id: string) => apiFetch(`/listings/${id}`, { method: "DELETE" }),
 }
-
 // ─── Users API ─────────────────────────────────────────────────────────────────
 
 export const usersApi = {

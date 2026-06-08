@@ -1,8 +1,41 @@
 import express from "express"
+import multer from "multer"
+import axios from "axios"
+import FormData from "form-data"
 import { verifyToken } from "../middleware/auth.js"
 import { db } from "../config/firebase.js"
 
 const router = express.Router()
+
+// Store files in memory for IMGBB upload
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB per file
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true)
+    else cb(new Error("Only images allowed"))
+  },
+})
+
+// Helper to upload image buffer to IMGBB
+async function uploadImageToImgBB(file) {
+  const IMGBB_API_KEY = process.env.IMGBB_API_KEY
+  if (!IMGBB_API_KEY) {
+    throw new Error("IMGBB_API_KEY not configured")
+  }
+
+  const form = new FormData()
+  form.append("image", file.buffer.toString("base64"))
+  form.append("name", `listing_${Date.now()}_${file.originalname}`)
+
+  const response = await axios.post(
+    `https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`,
+    form,
+    { headers: form.getHeaders() }
+  )
+
+  return response.data.data.url
+}
 
 router.get("/host/mine", verifyToken, async (req, res) => {
   try {
@@ -25,7 +58,6 @@ router.get("/host/mine", verifyToken, async (req, res) => {
   }
 })
 
-// Get all active listings (public)
 router.get("/", async (req, res) => {
   try {
     const { suburb, maxRent } = req.query
@@ -55,7 +87,6 @@ router.get("/", async (req, res) => {
   }
 })
 
-// ✅ Dynamic route LAST
 router.get("/:id", async (req, res) => {
   try {
     const doc = await db.collection("listings").doc(req.params.id).get()
@@ -69,13 +100,13 @@ router.get("/:id", async (req, res) => {
   }
 })
 
-// Create listing
-router.post("/", verifyToken, async (req, res) => {
+// Create listing with up to 5 photos
+router.post("/", verifyToken, upload.array("photos", 5), async (req, res) => {
   try {
     const {
       suburb, state, spareRooms, roomSize,
       rentPerWeek, billsIncluded, bathroomType,
-      furnished, availableFrom, houseRules, photoUrl,
+      furnished, availableFrom, houseRules,
     } = req.body
 
     if (!suburb || !state || !rentPerWeek || !roomSize) {
@@ -84,6 +115,14 @@ router.post("/", verifyToken, async (req, res) => {
 
     const userDoc = await db.collection("users").doc(req.user.uid).get()
     const userData = userDoc.data()
+
+    // Upload photos if provided
+    let photoUrls = []
+    if (req.files && req.files.length > 0) {
+      photoUrls = await Promise.all(
+        req.files.map((file) => uploadImageToImgBB(file))
+      )
+    }
 
     const listing = {
       hostId: req.user.uid,
@@ -95,12 +134,13 @@ router.post("/", verifyToken, async (req, res) => {
       spareRooms: Number(spareRooms) || 1,
       roomSize,
       rentPerWeek: Number(rentPerWeek),
-      billsIncluded: Boolean(billsIncluded),
+      billsIncluded: billsIncluded === "true" || billsIncluded === true,
       bathroomType,
-      furnished: Boolean(furnished),
+      furnished: furnished === "true" || furnished === true,
       availableFrom: availableFrom || null,
       houseRules: houseRules || null,
-      photoUrl: photoUrl || null,
+      photoUrl: photoUrls[0] || null,      // first photo as main
+      photoUrls: photoUrls,                 // all photos
       status: "active",
       createdAt: new Date().toISOString(),
     }
@@ -113,8 +153,8 @@ router.post("/", verifyToken, async (req, res) => {
   }
 })
 
-// Update listing
-router.put("/:id", verifyToken, async (req, res) => {
+// Update listing with up to 5 photos
+router.put("/:id", verifyToken, upload.array("photos", 5), async (req, res) => {
   try {
     const doc = await db.collection("listings").doc(req.params.id).get()
     if (!doc.exists) {
@@ -123,7 +163,30 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (doc.data().hostId !== req.user.uid) {
       return res.status(403).json({ error: "Not authorised" })
     }
-    await db.collection("listings").doc(req.params.id).update(req.body)
+
+    const updateData = { ...req.body }
+
+    // Upload new photos if provided
+    if (req.files && req.files.length > 0) {
+      const photoUrls = await Promise.all(
+        req.files.map((file) => uploadImageToImgBB(file))
+      )
+      updateData.photoUrl = photoUrls[0]
+      updateData.photoUrls = photoUrls
+    }
+
+    // Fix boolean fields from form data
+    if (updateData.billsIncluded !== undefined) {
+      updateData.billsIncluded = updateData.billsIncluded === "true" || updateData.billsIncluded === true
+    }
+    if (updateData.furnished !== undefined) {
+      updateData.furnished = updateData.furnished === "true" || updateData.furnished === true
+    }
+    if (updateData.rentPerWeek !== undefined) {
+      updateData.rentPerWeek = Number(updateData.rentPerWeek)
+    }
+
+    await db.collection("listings").doc(req.params.id).update(updateData)
     res.json({ message: "Listing updated successfully" })
   } catch (error) {
     console.error(error)
@@ -131,7 +194,6 @@ router.put("/:id", verifyToken, async (req, res) => {
   }
 })
 
-// Delete listing
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const doc = await db.collection("listings").doc(req.params.id).get()
@@ -141,8 +203,9 @@ router.delete("/:id", verifyToken, async (req, res) => {
     if (doc.data().hostId !== req.user.uid) {
       return res.status(403).json({ error: "Not authorised" })
     }
-    await db.collection("listings").doc(req.params.id).update({ status: "removed" })
-    res.json({ message: "Listing removed successfully" })
+    // Actually delete the document from the database
+    await db.collection("listings").doc(req.params.id).delete()
+    res.json({ message: "Listing deleted successfully" })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: "Server error" })

@@ -70,6 +70,7 @@ export interface Listing {
   availableFrom?: string | null;
   houseRules?: string | null;
   photoUrl?: string | null;
+  photoUrls?: string[] | null;
   status: "active" | "pending" | "removed";
   createdAt: string;
 }
@@ -119,20 +120,16 @@ export async function getAllListings(): Promise<Listing[]> {
 
 // ─── Saved Listings ───────────────────────────────────────────────────────────
 
-export async function toggleSavedListing(userId: string, listingId: string, listing?: Listing): Promise<boolean> {
+export async function toggleSavedListing(userId: string, listingId: string): Promise<boolean> {
   const ref = doc(db, "saved_listings", `${userId}_${listingId}`);
   const snap = await getDoc(ref);
   if (snap.exists()) {
     await deleteDoc(ref);
     return false;
   } else {
-    if (!listing) {
-      throw new Error("Listing details required to save favorite");
-    }
     await setDoc(ref, {
       userId,
       listingId,
-      listing,
       createdAt: new Date().toISOString(),
     });
     return true;
@@ -151,19 +148,21 @@ export async function getSavedListingIds(userId: string): Promise<string[]> {
 }
 
 export async function getSavedListings(userId: string): Promise<Listing[]> {
-  const q = query(collection(db, "saved_listings"), where("userId", "==", userId));
-  const snap = await getDocs(q);
-  return snap.docs
-    .map((d) => d.data().listing as Listing)
-    .filter(Boolean)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const ids = await getSavedListingIds(userId);
+  if (ids.length === 0) return [];
+  const listings = await Promise.all(
+    ids.map((id) => getDoc(doc(db, "listings", id)))
+  );
+  return listings
+    .map((snap) => (snap.exists() ? ({ id: snap.id, ...snap.data() } as Listing) : null))
+    .filter(Boolean) as Listing[];
 }
 
 // ─── Interests ────────────────────────────────────────────────────────────────
 
-export async function expressInterest(seekerId: string, hostId: string): Promise<void> {
+export async function expressInterest(seekerId: string, hostId: string, listingId?: string): Promise<void> {
   const ref = doc(db, "interests", `${seekerId}_${hostId}`);
-  await setDoc(ref, { seekerId, hostId, createdAt: new Date().toISOString() });
+  await setDoc(ref, { seekerId, hostId, listingId: listingId || null, createdAt: new Date().toISOString() });
 }
 
 export async function updateUserVerification(uid: string, verified: boolean): Promise<void> {
@@ -288,4 +287,49 @@ export async function getDashboardStats(userId: string, role: string) {
     savedListingsCount: savedIds.length,
     interestedSeekersCount: interests.length,
   };
+}
+
+export interface HostStats {
+  total: number;
+  active: number;
+  pending: number;
+  removed: number;
+  totalViews: number;
+}
+
+export async function getHostStats(hostId: string): Promise<HostStats> {
+  const q = query(collection(db, "listings"), where("hostId", "==", hostId));
+  const snap = await getDocs(q);
+  const listings = snap.docs.map((d) => d.data() as Listing);
+  
+  return {
+    total: listings.length,
+    active: listings.filter((l) => l.status === "active").length,
+    pending: listings.filter((l) => l.status === "pending").length,
+    removed: listings.filter((l) => l.status === "removed").length,
+    totalViews: 0,
+  };
+}
+
+export interface LocationStats {
+  location: string;
+  count: number;
+}
+
+export async function getListingsByLocation(hostId?: string): Promise<LocationStats[]> {
+  let q = hostId
+    ? query(collection(db, "listings"), where("hostId", "==", hostId))
+    : query(collection(db, "listings"), where("status", "==", "active"));
+  const snap = await getDocs(q);
+  const listings = snap.docs.map((d) => d.data() as Listing);
+  
+  const locationMap = new Map<string, number>();
+  listings.forEach((l) => {
+    const location = l.state; // Group by state only
+    locationMap.set(location, (locationMap.get(location) || 0) + 1);
+  });
+  
+  return Array.from(locationMap, ([location, count]) => ({ location, count })).sort(
+    (a, b) => b.count - a.count
+  );
 }
