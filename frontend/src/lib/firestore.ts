@@ -109,7 +109,23 @@ export async function updateListing(id: string, data: Partial<Listing>): Promise
   await updateDoc(doc(db, "listings", id), data as Record<string, unknown>);
 }
 
+export async function deleteSavedListingsForListing(listingId: string): Promise<void> {
+  const q = query(collection(db, "saved_listings"), where("listingId", "==", listingId));
+  const snap = await getDocs(q);
+  await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+}
+
+export async function removeListing(listingId: string): Promise<void> {
+  await deleteSavedListingsForListing(listingId);
+  await deleteDoc(doc(db, "listings", listingId));
+}
+
 export async function updateListingStatus(id: string, status: "active" | "removed"): Promise<void> {
+  if (status === "removed") {
+    await deleteSavedListingsForListing(id);
+    await updateDoc(doc(db, "listings", id), { status: "removed" });
+    return;
+  }
   await updateDoc(doc(db, "listings", id), { status });
 }
 
@@ -144,7 +160,20 @@ export async function isListingSaved(userId: string, listingId: string): Promise
 export async function getSavedListingIds(userId: string): Promise<string[]> {
   const q = query(collection(db, "saved_listings"), where("userId", "==", userId));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => d.data().listingId as string);
+  const ids: string[] = [];
+
+  for (const savedDoc of snap.docs) {
+    const listingId = savedDoc.data().listingId as string;
+    const listingSnap = await getDoc(doc(db, "listings", listingId));
+
+    if (listingSnap.exists() && listingSnap.data()?.status === "active") {
+      ids.push(listingId);
+    } else {
+      await deleteDoc(savedDoc.ref);
+    }
+  }
+
+  return ids;
 }
 
 export async function getSavedListings(userId: string): Promise<Listing[]> {
@@ -163,6 +192,89 @@ export async function getSavedListings(userId: string): Promise<Listing[]> {
 export async function expressInterest(seekerId: string, hostId: string, listingId?: string): Promise<void> {
   const ref = doc(db, "interests", `${seekerId}_${hostId}`);
   await setDoc(ref, { seekerId, hostId, listingId: listingId || null, createdAt: new Date().toISOString() });
+}
+
+export async function hasListingInterests(listingId: string): Promise<boolean> {
+  const q = query(collection(db, "interests"), where("listingId", "==", listingId));
+  const snap = await getDocs(q);
+  return !snap.empty;
+}
+
+export async function getInterestedListingIds(hostId: string): Promise<Set<string>> {
+  const q = query(collection(db, "interests"), where("hostId", "==", hostId));
+  const snap = await getDocs(q);
+  return new Set(
+    snap.docs
+      .map((d) => d.data().listingId as string | null)
+      .filter((id): id is string => Boolean(id))
+  );
+}
+
+export interface InterestRecord {
+  seekerId: string;
+  hostId: string;
+  listingId: string | null;
+  createdAt: string;
+}
+
+export async function getHostInterests(hostId: string): Promise<InterestRecord[]> {
+  const q = query(collection(db, "interests"), where("hostId", "==", hostId));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as InterestRecord);
+}
+
+export interface SeekerInterest {
+  listingId: string;
+  hostId: string;
+  createdAt: string;
+  listing: Listing | null;
+}
+
+export async function getSeekerInterests(seekerId: string): Promise<SeekerInterest[]> {
+  const q = query(collection(db, "interests"), where("seekerId", "==", seekerId));
+  const snap = await getDocs(q);
+
+  const interests = await Promise.all(
+    snap.docs.map(async (interestDoc) => {
+      const data = interestDoc.data();
+      const listingId = data.listingId as string | null;
+      if (!listingId) return null;
+
+      const listingSnap = await getDoc(doc(db, "listings", listingId));
+      const listing = listingSnap.exists()
+        ? ({ id: listingSnap.id, ...listingSnap.data() } as Listing)
+        : null;
+
+      return {
+        listingId,
+        hostId: data.hostId as string,
+        createdAt: data.createdAt as string,
+        listing,
+      };
+    })
+  );
+
+  return interests.filter((interest): interest is SeekerInterest => interest !== null);
+}
+
+export interface SeekerStats {
+  savedCount: number;
+  interestCount: number;
+  availableRooms: number;
+}
+
+export async function getSeekerStats(seekerId: string): Promise<SeekerStats> {
+  const [savedIds, interests, listings] = await Promise.all([
+    getSavedListingIds(seekerId),
+    getSeekerInterests(seekerId),
+    getListings(),
+  ]);
+
+  return {
+    savedCount: savedIds.length,
+    interestCount: interests.length,
+    availableRooms: listings.length,
+  };
 }
 
 export async function updateUserVerification(uid: string, verified: boolean): Promise<void> {

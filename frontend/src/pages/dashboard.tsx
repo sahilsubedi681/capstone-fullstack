@@ -23,14 +23,19 @@ import {
   updateUserVerification,
   getHostStats,
   getListingsByLocation,
+  getInterestedListingIds,
+  getHostInterests,
+  getSeekerInterests,
+  getSeekerStats,
   type Listing,
   type HostStats,
   type LocationStats,
+  type SeekerInterest,
+  type SeekerStats,
+  type InterestRecord,
 } from "@/lib/firestore";
 import type { UserProfile } from "@/lib/auth";
-import { db } from "@/lib/firebase";
-import { query, collection, where, getDocs } from "firebase/firestore";
-import { Search, MapPin, Home, User as UserIcon, MessageSquare, Eye, Heart } from "lucide-react";
+import { Search, MapPin, Home, User as UserIcon, MessageSquare, Eye, Heart, BarChart3, Users, TrendingUp } from "lucide-react";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -364,8 +369,12 @@ function HostDashboard({ user }: { user: UserProfile }) {
   const [photos, setPhotos] = useState<File[]>([])
   const [photoPreviews, setPhotoPreviews] = useState<string[]>([])
   const [hostStats, setHostStats] = useState<HostStats | null>(null)
-  const [locationStats, setLocationStats] = useState<LocationStats[]>([])
+  const [interestedListingIds, setInterestedListingIds] = useState<Set<string>>(new Set())
+  const [hostInterests, setHostInterests] = useState<InterestRecord[]>([])
+  const [hostLocations, setHostLocations] = useState<LocationStats[]>([])
   const { toast } = useToast()
+
+  const interestBlockedMessage = "Seekers are interested in this listing. You cannot make changes until interest is cleared."
 
   const [form, setForm] = useState({
     suburb: "",
@@ -385,18 +394,38 @@ function HostDashboard({ user }: { user: UserProfile }) {
       listingsApi.getMine().catch(() => []),
       getInterestedSeekers(user.uid),
       getHostStats(user.uid),
+      getInterestedListingIds(user.uid),
+      getHostInterests(user.uid),
       getListingsByLocation(user.uid),
-    ]).then(([l, s, stats, locStats]) => {
+    ]).then(([l, s, stats, interestedIds, interests, locations]) => {
       setListings(Array.isArray(l) ? l : [])
       setSeekers(s)
       setHostStats(stats)
-      setLocationStats(locStats)
+      setInterestedListingIds(interestedIds)
+      setHostInterests(interests)
+      setHostLocations(locations)
       setLoading(false)
     })
   }, [user.uid])
 
+  const statusTotal = (hostStats?.active ?? 0) + (hostStats?.removed ?? 0)
+  const rentChartData = listings.map((listing) => ({
+    label: `${listing.suburb}, ${listing.state}`,
+    value: listing.rentPerWeek,
+  }))
+  const interestChartData = listings
+    .map((listing) => ({
+      label: `${listing.suburb}`,
+      value: hostInterests.filter((interest) => interest.listingId === listing.id).length,
+    }))
+    .filter((item) => item.value > 0)
+
 const handleCreateListing = async (e: React.FormEvent) => {
   e.preventDefault()
+  if (editingId && interestedListingIds.has(editingId)) {
+    toast({ title: "Cannot edit listing", description: interestBlockedMessage, variant: "destructive" })
+    return
+  }
   setSaving(true)
   try {
     if (editingId) {
@@ -436,93 +465,99 @@ const handleCreateListing = async (e: React.FormEvent) => {
 }
 
   return (
-    <div className="grid lg:grid-cols-3 gap-8">
+    <div className="space-y-8">
+      <section className="space-y-6">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="h-6 w-6 text-primary" />
+          <h2 className="text-2xl font-bold">Statistics</h2>
+        </div>
+
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <DashboardStatCard title="Total Listings" value={hostStats?.total ?? 0} icon={<Home className="h-5 w-5" />} />
+            <DashboardStatCard title="Active Rooms" value={hostStats?.active ?? 0} icon={<TrendingUp className="h-5 w-5" />} />
+            <DashboardStatCard title="Inactive Rooms" value={hostStats?.removed ?? 0} icon={<BarChart3 className="h-5 w-5" />} />
+            <DashboardStatCard title="Interested Seekers" value={seekers.length} icon={<Users className="h-5 w-5" />} />
+          </div>
+        )}
+
+        {!loading && hostStats && hostStats.total > 0 && (
+          <div className="grid lg:grid-cols-3 gap-6">
+            <Card className="rounded-2xl border-border/50 shadow-md">
+              <CardHeader>
+                <CardTitle>Listing Status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {statusTotal > 0 ? (
+                  <DonutChart
+                    total={statusTotal}
+                    centerLabel="Listings"
+                    segments={[
+                      { value: hostStats.active, color: "#10b981", label: "Active" },
+                      { value: hostStats.removed, color: "#ef4444", label: "Inactive" },
+                    ]}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">No listing data yet.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-2xl border-border/50 shadow-md">
+              <CardHeader>
+                <CardTitle>Rent by Room</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {rentChartData.length > 0 ? (
+                  <HorizontalBarChart data={rentChartData} valuePrefix="$" suffix="/wk" />
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">Add a listing to see rent data.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-2xl border-border/50 shadow-md">
+              <CardHeader>
+                <CardTitle>Listings by State</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {hostLocations.length > 0 ? (
+                  <HorizontalBarChart
+                    data={hostLocations.map((location) => ({
+                      label: location.location,
+                      value: location.count,
+                    }))}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">No location data yet.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {!loading && interestChartData.length > 0 && (
+          <Card className="rounded-2xl border-border/50 shadow-md">
+            <CardHeader>
+              <CardTitle>Seeker Interest by Room</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <HorizontalBarChart data={interestChartData} />
+            </CardContent>
+          </Card>
+        )}
+      </section>
+
+      <div className="grid lg:grid-cols-3 gap-8">
       <div className="lg:col-span-2 space-y-8">
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-bold">My Listings</h2>
           <Button onClick={() => { setShowForm(true); setEditingId(null) }}>Add New Room</Button>
         </div>
-
-        {/* Listings Status Overview */}
-        {hostStats && hostStats.total > 0 && (
-          <Card className="rounded-2xl border-border/50 shadow-md">
-            <CardHeader>
-              <CardTitle>Listings Status Overview</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid md:grid-cols-2 gap-8 items-center">
-                {/* Donut Chart */}
-                <div className="flex items-center justify-center">
-                  <div className="relative w-40 h-40">
-                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 120 120">
-                      <circle
-                        cx="60"
-                        cy="60"
-                        r="50"
-                        fill="none"
-                        stroke="#f3f4f6"
-                        strokeWidth="15"
-                      />
-                      <circle
-                        cx="60"
-                        cy="60"
-                        r="50"
-                        fill="none"
-                        stroke="#10b981"
-                        strokeWidth="15"
-                        strokeDasharray={`${(hostStats.active / (hostStats.active + hostStats.removed)) * 314.159} 314.159`}
-                      />
-                      <circle
-                        cx="60"
-                        cy="60"
-                        r="50"
-                        fill="none"
-                        stroke="#ef4444"
-                        strokeWidth="15"
-                        strokeDasharray={`${(hostStats.removed / (hostStats.active + hostStats.removed)) * 314.159} 314.159`}
-                        strokeDashoffset={-((hostStats.active / (hostStats.active + hostStats.removed)) * 314.159)}
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center flex-col">
-                      <p className="text-2xl font-bold">{hostStats.active + hostStats.removed}</p>
-                      <p className="text-xs text-muted-foreground">Listings</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-3 bg-green-500/10 rounded-lg border border-green-500/20">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-green-500" />
-                      <span className="font-medium">Active</span>
-                    </div>
-                    <span className="font-bold">{hostStats.active} ({Math.round((hostStats.active / (hostStats.active + hostStats.removed)) * 100)}%)</span>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-red-500/10 rounded-lg border border-red-500/20">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-red-500" />
-                      <span className="font-medium">Inactive</span>
-                    </div>
-                    <span className="font-bold">{hostStats.removed} ({Math.round((hostStats.removed / (hostStats.active + hostStats.removed)) * 100)}%)</span>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Australia Map by State */}
-        {locationStats.length > 0 && (
-          <Card className="rounded-2xl border-border/50 shadow-md">
-            <CardHeader>
-              <CardTitle>Your Listings by Location</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="w-full h-96 flex items-center justify-center">
-                <AustraliaMap locationStats={locationStats} />
-              </div>
-            </CardContent>
-          </Card>
-        )}
 
         {loading ? (
           <div className="space-y-4">
@@ -566,11 +601,21 @@ const handleCreateListing = async (e: React.FormEvent) => {
                     <div><p className="text-muted-foreground">Furnished</p><p className="font-bold">{listing.furnished ? "Yes" : "No"}</p></div>
                   </div>
                   {listing.houseRules && <p className="text-sm text-foreground mb-4 line-clamp-2">{listing.houseRules}</p>}
+                  {interestedListingIds.has(listing.id) && (
+                    <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+                      Seekers are interested in this room. Editing, deleting, and status changes are locked until interest is cleared.
+                    </p>
+                  )}
                   <div className="flex gap-2 flex-wrap">
                     <Button
                       variant="outline"
                       size="sm"
+                      disabled={interestedListingIds.has(listing.id)}
                       onClick={() => {
+                        if (interestedListingIds.has(listing.id)) {
+                          toast({ title: "Cannot edit listing", description: interestBlockedMessage, variant: "destructive" })
+                          return
+                        }
                         setForm({
                           suburb: listing.suburb,
                           state: listing.state,
@@ -593,7 +638,12 @@ const handleCreateListing = async (e: React.FormEvent) => {
                       <Button
                         variant="outline"
                         size="sm"
+                        disabled={interestedListingIds.has(listing.id)}
                         onClick={async () => {
+                          if (interestedListingIds.has(listing.id)) {
+                            toast({ title: "Cannot mark inactive", description: interestBlockedMessage, variant: "destructive" })
+                            return
+                          }
                           try {
                             await listingsApi.update(listing.id, { status: "removed" })
                             setListings(listings.map((l) =>
@@ -608,7 +658,7 @@ const handleCreateListing = async (e: React.FormEvent) => {
                                   }
                                 : null
                             )
-                            toast({ title: "Room inactive", description: "Your listing has been marked as inactive." })
+                            toast({ title: "Room inactive", description: "Your listing is now hidden from seekers." })
                           } catch {
                             toast({ title: "Failed to mark inactive", variant: "destructive" })
                           }
@@ -617,24 +667,50 @@ const handleCreateListing = async (e: React.FormEvent) => {
                         Mark Inactive
                       </Button>
                     )}
+                    {listing.status === "removed" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={interestedListingIds.has(listing.id)}
+                        onClick={async () => {
+                          if (interestedListingIds.has(listing.id)) {
+                            toast({ title: "Cannot mark active", description: interestBlockedMessage, variant: "destructive" })
+                            return
+                          }
+                          try {
+                            await listingsApi.update(listing.id, { status: "active" })
+                            setListings(listings.map((l) =>
+                              l.id === listing.id ? { ...l, status: "active" } : l
+                            ))
+                            setHostStats((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    active: prev.active + 1,
+                                    removed: prev.removed - 1,
+                                  }
+                                : null
+                            )
+                            toast({ title: "Room active", description: "Your listing is live again." })
+                          } catch {
+                            toast({ title: "Failed to mark active", variant: "destructive" })
+                          }
+                        }}
+                      >
+                        Mark Active
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
                       className="text-destructive"
+                      disabled={interestedListingIds.has(listing.id)}
                       onClick={async () => {
-                        const q = query(collection(db, "interests"), where("hostId", "==", user.uid))
-                        const snap = await getDocs(q)
-                        const hasInterest = snap.docs.some((doc) => doc.data().listingId === listing.id)
-                        
-                        if (hasInterest) {
-                          toast({
-                            title: "Cannot delete",
-                            description: "Seekers are interested in this listing. Mark it inactive instead.",
-                            variant: "destructive",
-                          })
+                        if (interestedListingIds.has(listing.id)) {
+                          toast({ title: "Cannot delete", description: interestBlockedMessage, variant: "destructive" })
                           return
                         }
-                        
+
                         try {
                           await listingsApi.delete(listing.id)
                           setListings(listings.filter((l) => l.id !== listing.id))
@@ -853,46 +929,88 @@ const handleCreateListing = async (e: React.FormEvent) => {
           </Card>
         )}
 
-        <h2 className="text-2xl font-bold mt-8">Interested Seekers</h2>
-        {loading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-24 rounded-xl" />
-            <Skeleton className="h-24 rounded-xl" />
-          </div>
-        ) : seekers.length === 0 ? (
-          <Card className="rounded-2xl border-dashed bg-transparent shadow-none">
-            <CardContent className="p-12 text-center text-muted-foreground">
-              <UserIcon className="h-12 w-12 mx-auto mb-4 opacity-20" />
-              <p className="text-lg">No one has expressed interest in your listing yet.</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-4">
-            {seekers.map((seeker) => (
-              <Card key={seeker.uid} className="rounded-xl border-border/50 transition-all hover:shadow-md">
-                <CardContent className="p-4 flex items-center gap-4">
-                  <div className="h-16 w-16 rounded-full bg-muted overflow-hidden shrink-0">
-                    <img
-                      src={seeker.photoUrl || `https://i.pravatar.cc/150?u=${seeker.uid}`}
-                      alt={seeker.fullName}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-lg font-bold">{seeker.fullName}{seeker.age ? `, ${seeker.age}` : ""}</h4>
-                      {seeker.verified && (
-                        <Badge className="bg-green-500/20 text-green-700 border-none text-xs">✓ Verified</Badge>
-                      )}
-                    </div>
-                    <p className="text-sm text-muted-foreground line-clamp-1">{seeker.bio || "Looking for a quiet, comfortable home."}</p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setSelectedSeeker(seeker)}>View Profile</Button>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
+      </div>
+
+      <div className="space-y-6">
+        <Card className="rounded-2xl border-border/50 shadow-md">
+          <CardHeader>
+            <CardTitle>Quick Summary</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Rooms with interest</span>
+              <span className="font-semibold">{interestedListingIds.size}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Average rent</span>
+              <span className="font-semibold">
+                {listings.length > 0
+                  ? `$${Math.round(listings.reduce((sum, listing) => sum + listing.rentPerWeek, 0) / listings.length)}/wk`
+                  : "N/A"}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Top state</span>
+              <span className="font-semibold">{hostLocations[0]?.location ?? "N/A"}</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div>
+          <h2 className="text-2xl font-bold mb-4">Interested Seekers</h2>
+          {loading ? (
+            <div className="space-y-4">
+              <Skeleton className="h-24 rounded-xl" />
+              <Skeleton className="h-24 rounded-xl" />
+            </div>
+          ) : seekers.length === 0 ? (
+            <Card className="rounded-2xl border-dashed bg-transparent shadow-none">
+              <CardContent className="p-8 text-center text-muted-foreground">
+                <UserIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
+                <p>No one has expressed interest yet.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {seekers.map((seeker) => {
+                const interest = hostInterests.find((item) => item.seekerId === seeker.uid)
+                const interestedListing = listings.find((listing) => listing.id === interest?.listingId)
+                return (
+                  <Card key={seeker.uid} className="rounded-xl border-border/50 transition-all hover:shadow-md">
+                    <CardContent className="p-4 space-y-3">
+                      <div className="flex items-center gap-4">
+                        <div className="h-14 w-14 rounded-full bg-muted overflow-hidden shrink-0">
+                          <img
+                            src={seeker.photoUrl || `https://i.pravatar.cc/150?u=${seeker.uid}`}
+                            alt={seeker.fullName}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold truncate">{seeker.fullName}{seeker.age ? `, ${seeker.age}` : ""}</h4>
+                            {seeker.verified && (
+                              <Badge className="bg-green-500/20 text-green-700 border-none text-xs shrink-0">Verified</Badge>
+                            )}
+                          </div>
+                          {interestedListing && (
+                            <p className="text-sm text-muted-foreground truncate">
+                              Interested in: {interestedListing.suburb}, {interestedListing.state}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <Button variant="outline" size="sm" className="w-full" onClick={() => setSelectedSeeker(seeker)}>
+                        View Profile
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
       </div>
 
       {/* Seeker Profile Modal */}
@@ -993,131 +1111,36 @@ const handleCreateListing = async (e: React.FormEvent) => {
   )
 }
 
-// Australia Map Component
-interface AustraliaMapProps {
-  locationStats: Array<{ location: string; count: number }>;
-}
-
-function AustraliaMap({ locationStats }: AustraliaMapProps) {
-  const getColorByCount = (state: string): string => {
-    const stat = locationStats.find((s) => s.location === state);
-    const count = stat?.count || 0;
-    const maxCount = Math.max(...locationStats.map((s) => s.count), 1);
-    const ratio = count / maxCount;
-
-    if (ratio === 0) return "bg-gray-100 border-gray-300";
-    if (ratio < 0.2) return "bg-blue-100 border-blue-300";
-    if (ratio < 0.4) return "bg-blue-200 border-blue-400";
-    if (ratio < 0.6) return "bg-blue-400 border-blue-500";
-    if (ratio < 0.8) return "bg-blue-500 border-blue-600";
-    return "bg-blue-700 border-blue-800";
-  };
-
-  const getTextColor = (state: string): string => {
-    const stat = locationStats.find((s) => s.location === state);
-    const count = stat?.count || 0;
-    const maxCount = Math.max(...locationStats.map((s) => s.count), 1);
-    const ratio = count / maxCount;
-
-    if (ratio > 0.6) return "text-white";
-    return "text-gray-900";
-  };
-
-  const getCountByState = (state: string): number => {
-    return locationStats.find((s) => s.location === state)?.count || 0;
-  };
-
-  const stateMap = [
-    // Row 1 - Western & Northern
-    { name: "WA", row: 0, col: 0, span: 2 },
-    { name: "NT", row: 0, col: 2, span: 2 },
-    { name: "QLD", row: 0, col: 4, span: 2 },
-    
-    // Row 2 - SA & NSW
-    { name: "SA", row: 1, col: 1, span: 2 },
-    { name: "NSW", row: 1, col: 4, span: 2 },
-    
-    // Row 3 - VIC & ACT
-    { name: "VIC", row: 2, col: 1, span: 2 },
-    { name: "ACT", row: 2, col: 3, span: 1 },
-    
-    // Row 4 - Tasmania
-    { name: "TAS", row: 3, col: 4, span: 2 },
-  ];
-
-  return (
-    <div className="w-full space-y-6">
-      {/* Map Grid */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
-        {stateMap.map((state) => {
-          const count = getCountByState(state.name);
-          return (
-            <div
-              key={state.name}
-              className={`${getColorByCount(state.name)} border-2 rounded-lg p-4 text-center transition-all hover:shadow-lg hover:scale-105 cursor-pointer`}
-              style={{
-                gridColumn: `span ${state.span}`,
-              }}
-            >
-              <div className={`font-bold text-lg ${getTextColor(state.name)}`}>
-                {state.name}
-              </div>
-              <div className={`text-2xl font-bold mt-2 ${getTextColor(state.name)}`}>
-                {count}
-              </div>
-              <div className={`text-xs mt-1 ${getTextColor(state.name)} opacity-75`}>
-                {count === 1 ? "listing" : "listings"}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Legend */}
-      <div className="flex flex-wrap gap-4 justify-center text-xs">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-gray-100 border-2 border-gray-300 rounded" />
-          <span>No listings</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-blue-100 border-2 border-blue-300 rounded" />
-          <span>Few</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-blue-400 border-2 border-blue-500 rounded" />
-          <span>Some</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-blue-700 border-2 border-blue-800 rounded" />
-          <span>Many</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function SeekerDashboard({ user }: { user: UserProfile }) {
   const [suburb, setSuburb] = useState("");
   const [maxRent, setMaxRent] = useState<number | undefined>();
   const [listings, setListings] = useState<Listing[]>([]);
   const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [interestedRooms, setInterestedRooms] = useState<SeekerInterest[]>([]);
+  const [seekerStats, setSeekerStats] = useState<SeekerStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"browse" | "favourites">("browse");
+  const [activeTab, setActiveTab] = useState<"browse" | "favourites" | "interests">("browse");
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [expressing, setExpressing] = useState<string | null>(null);
   const [locations, setLocations] = useState<LocationStats[]>([]);
   const { toast } = useToast();
 
+  const expressedListingIds = new Set(interestedRooms.map((interest) => interest.listingId));
+
   useEffect(() => {
     Promise.all([
       listingsApi.getAll(),
       getSavedListingIds(user.uid),
-      getListingsByLocation()
-    ]).then(([l, s, loc]) => {
+      getListingsByLocation(),
+      getSeekerInterests(user.uid),
+      getSeekerStats(user.uid),
+    ]).then(([l, s, loc, interests, stats]) => {
       setListings(l);
       setSavedIds(s);
       setLocations(loc);
+      setInterestedRooms(interests);
+      setSeekerStats(stats);
       setLoading(false);
     });
   }, [user.uid]);
@@ -1154,6 +1177,20 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
     setExpressing(listing.id);
     try {
       await expressInterest(user.uid, listing.hostId, listing.id);
+      const newInterest: SeekerInterest = {
+        listingId: listing.id,
+        hostId: listing.hostId,
+        createdAt: new Date().toISOString(),
+        listing,
+      };
+      const hadHostInterest = interestedRooms.some((interest) => interest.hostId === listing.hostId);
+      setInterestedRooms((prev) => [
+        ...prev.filter((interest) => interest.hostId !== listing.hostId),
+        newInterest,
+      ]);
+      if (!hadHostInterest) {
+        setSeekerStats((stats) => stats ? { ...stats, interestCount: stats.interestCount + 1 } : stats);
+      }
       toast({
         title: "Interest expressed!",
         description: `${listing.hostName} has been notified. They will reach out to you soon.`,
@@ -1174,9 +1211,26 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
 
   return (
     <div className="space-y-8">
+      <section className="space-y-4">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="h-6 w-6 text-primary" />
+          <h2 className="text-2xl font-bold">My Activity</h2>
+        </div>
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <DashboardStatCard title="Favourite Rooms" value={seekerStats?.savedCount ?? 0} icon={<Heart className="h-5 w-5" />} />
+            <DashboardStatCard title="Interests Expressed" value={seekerStats?.interestCount ?? 0} icon={<Users className="h-5 w-5" />} />
+            <DashboardStatCard title="Rooms Available" value={seekerStats?.availableRooms ?? 0} icon={<Home className="h-5 w-5" />} />
+          </div>
+        )}
+      </section>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-border">
+      <div className="flex gap-2 border-b border-border overflow-x-auto">
         <button
           onClick={() => setActiveTab("browse")}
           className={`px-6 py-3 text-lg font-semibold border-b-2 transition-colors ${
@@ -1199,6 +1253,21 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
           {savedIds.length > 0 && (
             <span className="bg-primary text-primary-foreground text-sm rounded-full px-2 py-0.5">
               {savedIds.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab("interests")}
+          className={`px-6 py-3 text-lg font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${
+            activeTab === "interests"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          My Interests
+          {interestedRooms.length > 0 && (
+            <span className="bg-primary text-primary-foreground text-sm rounded-full px-2 py-0.5">
+              {interestedRooms.length}
             </span>
           )}
         </button>
@@ -1291,8 +1360,46 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
                   key={listing.id}
                   listing={listing}
                   isSaved={savedIds.includes(listing.id)}
+                  hasExpressedInterest={expressedListingIds.has(listing.id)}
                   onSave={handleSave}
                   onView={() => setSelectedListing(listing)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Interests Tab */}
+      {activeTab === "interests" && (
+        <>
+          <h2 className="text-2xl font-bold">Rooms I Expressed Interest In</h2>
+          {loading ? (
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-64 rounded-2xl" />)}
+            </div>
+          ) : interestedRooms.length === 0 ? (
+            <Card className="rounded-2xl border-dashed bg-transparent shadow-none">
+              <CardContent className="p-12 text-center text-muted-foreground">
+                <Users className="h-12 w-12 mx-auto mb-4 opacity-20" />
+                <p className="text-lg mb-2">No interests expressed yet.</p>
+                <p className="text-base">Browse rooms and click Express Interest to contact a host.</p>
+                <Button
+                  variant="outline"
+                  className="mt-6 rounded-xl"
+                  onClick={() => setActiveTab("browse")}
+                >
+                  Browse Rooms
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {interestedRooms.map((interest) => (
+                <InterestListingCard
+                  key={`${interest.hostId}_${interest.listingId}`}
+                  interest={interest}
+                  onView={() => interest.listing && setSelectedListing(interest.listing)}
                 />
               ))}
             </div>
@@ -1500,12 +1607,12 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
                 <Button
                   className="flex-1 h-14 text-lg rounded-xl"
                   onClick={() => handleExpressInterest(selectedListing)}
-                  disabled={expressing === selectedListing.id}
+                  disabled={expressing === selectedListing.id || expressedListingIds.has(selectedListing.id)}
                 >
                   {expressing === selectedListing.id ? (
                     <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                   ) : null}
-                  Express Interest
+                  {expressedListingIds.has(selectedListing.id) ? "Interest Sent" : "Express Interest"}
                 </Button>
               </div>
 
@@ -1520,15 +1627,200 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
   );
 }
 
+function DashboardStatCard({
+  title,
+  value,
+  icon,
+}: {
+  title: string;
+  value: number | string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <Card className="rounded-2xl border-border/50 shadow-sm">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm text-muted-foreground">{title}</p>
+            <p className="text-3xl font-bold mt-1">{value}</p>
+          </div>
+          <div className="p-2.5 rounded-xl bg-primary/10 text-primary shrink-0">{icon}</div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DonutChart({
+  segments,
+  total,
+  centerLabel,
+}: {
+  segments: { value: number; color: string; label: string }[];
+  total: number;
+  centerLabel: string;
+}) {
+  const circumference = 314.159;
+  let offset = 0;
+
+  return (
+    <div className="grid md:grid-cols-2 gap-6 items-center">
+      <div className="flex items-center justify-center">
+        <div className="relative w-40 h-40">
+          <svg className="w-full h-full transform -rotate-90" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="50" fill="none" stroke="#f3f4f6" strokeWidth="15" />
+            {segments.map((segment) => {
+              const dash = total > 0 ? (segment.value / total) * circumference : 0;
+              const circle = (
+                <circle
+                  key={segment.label}
+                  cx="60"
+                  cy="60"
+                  r="50"
+                  fill="none"
+                  stroke={segment.color}
+                  strokeWidth="15"
+                  strokeDasharray={`${dash} ${circumference}`}
+                  strokeDashoffset={-offset}
+                />
+              );
+              offset += dash;
+              return circle;
+            })}
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center flex-col">
+            <p className="text-2xl font-bold">{total}</p>
+            <p className="text-xs text-muted-foreground">{centerLabel}</p>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {segments.map((segment) => (
+          <div key={segment.label} className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: segment.color }} />
+              <span>{segment.label}</span>
+            </div>
+            <span className="font-semibold">
+              {segment.value} ({total > 0 ? Math.round((segment.value / total) * 100) : 0}%)
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HorizontalBarChart({
+  data,
+  valuePrefix = "",
+  suffix = "",
+}: {
+  data: { label: string; value: number }[];
+  valuePrefix?: string;
+  suffix?: string;
+}) {
+  const max = Math.max(...data.map((item) => item.value), 1);
+
+  return (
+    <div className="space-y-4">
+      {data.map((item) => (
+        <div key={item.label} className="space-y-1.5">
+          <div className="flex items-center justify-between text-sm gap-3">
+            <span className="truncate text-muted-foreground">{item.label}</span>
+            <span className="font-semibold shrink-0">
+              {valuePrefix}{item.value}{suffix}
+            </span>
+          </div>
+          <div className="h-2.5 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: `${(item.value / max) * 100}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InterestListingCard({
+  interest,
+  onView,
+}: {
+  interest: SeekerInterest;
+  onView: () => void;
+}) {
+  const listing = interest.listing;
+
+  if (!listing) {
+    return (
+      <Card className="rounded-2xl border-border/50 shadow-sm">
+        <CardContent className="p-6 space-y-3">
+          <Badge variant="outline">Unavailable</Badge>
+          <p className="font-semibold">This room is no longer available.</p>
+          <p className="text-sm text-muted-foreground">
+            Expressed on {new Date(interest.createdAt).toLocaleDateString("en-AU")}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="rounded-2xl border-border/50 shadow-sm overflow-hidden flex flex-col">
+      <div className="h-40 bg-muted relative">
+        {listing.photoUrl ? (
+          <img src={listing.photoUrl} alt="Room" className="w-full h-full object-cover" />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Home className="h-10 w-10 text-muted-foreground opacity-30" />
+          </div>
+        )}
+        <Badge
+          className={`absolute top-3 left-3 border-none ${
+            listing.status === "active"
+              ? "bg-green-500/90 text-white"
+              : "bg-amber-500/90 text-white"
+          }`}
+        >
+          {listing.status === "active" ? "Active" : "Inactive"}
+        </Badge>
+      </div>
+      <CardContent className="p-5 flex-1 flex flex-col">
+        <h3 className="text-xl font-bold capitalize mb-1">{listing.roomSize} Room</h3>
+        <p className="text-muted-foreground flex items-center gap-1.5 mb-2 text-sm">
+          <MapPin className="h-4 w-4" /> {listing.suburb}, {listing.state}
+        </p>
+        <p className="text-sm text-muted-foreground mb-4">
+          Interest sent on {new Date(interest.createdAt).toLocaleDateString("en-AU")}
+        </p>
+        <div className="mt-auto flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm text-muted-foreground">Host</p>
+            <p className="font-medium">{listing.hostName}</p>
+          </div>
+          <p className="font-bold text-lg">${listing.rentPerWeek}/wk</p>
+        </div>
+        <Button variant="outline" className="w-full mt-4 rounded-xl" onClick={onView}>
+          View Details
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 // Shared listing card component
 function ListingCard({
   listing,
   isSaved,
+  hasExpressedInterest = false,
   onSave,
   onView,
 }: {
   listing: Listing;
   isSaved: boolean;
+  hasExpressedInterest?: boolean;
   onSave: (id: string) => void;
   onView: () => void;
 }) {
@@ -1554,6 +1846,11 @@ function ListingCard({
         <div className="absolute top-4 right-4 bg-background/90 backdrop-blur rounded-full px-3 py-1 font-bold text-foreground shadow-sm">
           ${listing.rentPerWeek}/wk
         </div>
+        {hasExpressedInterest && (
+          <Badge className="absolute top-4 left-4 bg-primary text-primary-foreground border-none">
+            Interest Sent
+          </Badge>
+        )}
       </div>
       <CardContent className="p-5 flex-1 flex flex-col">
         <h3 className="text-xl font-bold mb-1 capitalize">{listing.roomSize} Room</h3>

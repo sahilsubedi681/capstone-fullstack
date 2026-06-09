@@ -37,6 +37,31 @@ async function uploadImageToImgBB(file) {
   return response.data.data.url
 }
 
+async function deleteSavedListingsForListing(listingId) {
+  const snapshot = await db.collection("saved_listings")
+    .where("listingId", "==", listingId)
+    .get()
+
+  if (snapshot.empty) return
+
+  const batch = db.batch()
+  snapshot.docs.forEach((doc) => batch.delete(doc.ref))
+  await batch.commit()
+}
+
+async function hasListingInterests(listingId) {
+  const snapshot = await db.collection("interests")
+    .where("listingId", "==", listingId)
+    .limit(1)
+    .get()
+  return !snapshot.empty
+}
+
+async function removeListing(listingId) {
+  await deleteSavedListingsForListing(listingId)
+  await db.collection("listings").doc(listingId).delete()
+}
+
 router.get("/host/mine", verifyToken, async (req, res) => {
   try {
     const snapshot = await db.collection("listings")
@@ -165,6 +190,24 @@ router.put("/:id", verifyToken, upload.array("photos", 5), async (req, res) => {
     }
 
     const updateData = { ...req.body }
+    const listingId = req.params.id
+
+    if (await hasListingInterests(listingId)) {
+      return res.status(409).json({
+        error: "Cannot modify this listing while seekers are interested. Wait until interest is cleared.",
+      })
+    }
+
+    if (updateData.status === "removed") {
+      await deleteSavedListingsForListing(listingId)
+      await db.collection("listings").doc(listingId).update({ status: "removed" })
+      return res.json({ message: "Listing marked as inactive" })
+    }
+
+    if (updateData.status === "active") {
+      await db.collection("listings").doc(listingId).update({ status: "active" })
+      return res.json({ message: "Listing marked as active" })
+    }
 
     // Upload new photos if provided
     if (req.files && req.files.length > 0) {
@@ -186,7 +229,9 @@ router.put("/:id", verifyToken, upload.array("photos", 5), async (req, res) => {
       updateData.rentPerWeek = Number(updateData.rentPerWeek)
     }
 
-    await db.collection("listings").doc(req.params.id).update(updateData)
+    delete updateData.status
+
+    await db.collection("listings").doc(listingId).update(updateData)
     res.json({ message: "Listing updated successfully" })
   } catch (error) {
     console.error(error)
@@ -203,8 +248,14 @@ router.delete("/:id", verifyToken, async (req, res) => {
     if (doc.data().hostId !== req.user.uid) {
       return res.status(403).json({ error: "Not authorised" })
     }
-    // Actually delete the document from the database
-    await db.collection("listings").doc(req.params.id).delete()
+
+    if (await hasListingInterests(req.params.id)) {
+      return res.status(409).json({
+        error: "Cannot delete this listing while seekers are interested. Wait until interest is cleared.",
+      })
+    }
+
+    await removeListing(req.params.id)
     res.json({ message: "Listing deleted successfully" })
   } catch (error) {
     console.error(error)
