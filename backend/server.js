@@ -6,6 +6,8 @@ import cors from "cors"
 import "./config/firebase.js"
 import userRoutes from "./routes/users.js"
 import listingRoutes from "./routes/listings.js"
+import messageRoutes from "./routes/messages.js"
+import roomRequestRoutes from "./routes/roomRequests.js"
 
 const app = express()
 app.use(cors())
@@ -23,6 +25,8 @@ app.get("/", (req, res) => {
 
 app.use("/users", userRoutes)
 app.use("/listings", listingRoutes)
+app.use("/messages", messageRoutes)
+app.use("/room-requests", roomRequestRoutes)
 
 const PORT = process.env.PORT || 8000
 

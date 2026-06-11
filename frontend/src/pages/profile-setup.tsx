@@ -16,7 +16,7 @@ import { Loader2, Camera, ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function ProfileSetupPage() {
-  const { user, refreshProfile } = useAuth();
+  const { user, isLoading, refreshProfile } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -59,8 +59,16 @@ export default function ProfileSetupPage() {
   });
 
   useEffect(() => {
-    if (!user) setLocation("/login");
-  }, [user, setLocation]);
+    if (!isLoading && !user) setLocation("/login");
+  }, [isLoading, user, setLocation]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   if (!user) return null;
 

@@ -152,3 +152,9 @@ export function isSignInLink(url: string): boolean {
 export function getMagicLinkEmail(): string | null {
   return localStorage.getItem(MAGIC_LINK_EMAIL_KEY);
 }
+
+export function getAuthenticatedRedirectPath(user: UserProfile | null): string {
+  if (!user) return "/signup";
+  if (user.role === "admin") return "/admin";
+  return "/dashboard";
+}

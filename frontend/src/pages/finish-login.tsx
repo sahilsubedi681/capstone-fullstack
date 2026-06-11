@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { useAuth, MAGIC_LINK_EMAIL_KEY } from "@/lib/auth";
+import { useAuth, MAGIC_LINK_EMAIL_KEY, getAuthenticatedRedirectPath } from "@/lib/auth";
 import { getUserProfile, createUserProfile } from "@/lib/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
@@ -99,7 +99,7 @@ export default function FinishLoginPage() {
           title: "Welcome back!",
           description: `Hello ${profile.fullName || profile.email}`,
         });
-        setLocation(profile.role === "admin" ? "/admin" : "/dashboard");
+        setLocation(getAuthenticatedRedirectPath(profile));
       } else {
         setLocation("/signup");
       }

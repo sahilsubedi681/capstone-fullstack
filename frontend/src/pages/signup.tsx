@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useAuth } from "@/lib/auth";
+import { useAuth, getAuthenticatedRedirectPath } from "@/lib/auth";
 import { createUserProfile, getUserProfile } from "@/lib/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { Home, User, Loader2, ArrowLeft, Mail } from "lucide-react";
@@ -32,9 +32,15 @@ export default function SignupPage() {
     agreeToTerms: false,
   });
 
-const { signInWithGoogle, setUserProfile, refreshProfile, sendMagicLink } = useAuth();
+const { user, isLoading: authLoading, signInWithGoogle, setUserProfile, refreshProfile, sendMagicLink } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      setLocation(getAuthenticatedRedirectPath(user));
+    }
+  }, [authLoading, user, setLocation]);
 
   const handleRoleSelect = (selectedRole: "host" | "seeker") => {
     setRole(selectedRole);
@@ -79,7 +85,7 @@ const { signInWithGoogle, setUserProfile, refreshProfile, sendMagicLink } = useA
           title: "Welcome back!", 
           description: "You've been signed in successfully." 
         });
-        setLocation("/dashboard");
+        setLocation(getAuthenticatedRedirectPath(existingProfile));
         return;
       }
       

@@ -14,7 +14,6 @@ import { useToast } from "@/hooks/use-toast"
 import {
   getListings,
   getHostListing,
-  getInterestedSeekers,
   getDashboardStats,
   toggleSavedListing,
   getSavedListingIds,
@@ -25,20 +24,39 @@ import {
   getListingsByLocation,
   getInterestedListingIds,
   getHostInterests,
+  getHostInterestEntries,
   getSeekerInterests,
   getSeekerStats,
+  getSeekerBookedRooms,
   type Listing,
   type HostStats,
   type LocationStats,
   type SeekerInterest,
   type SeekerStats,
   type InterestRecord,
+  type HostInterestEntry,
 } from "@/lib/firestore";
 import type { UserProfile } from "@/lib/auth";
-import { Search, MapPin, Home, User as UserIcon, MessageSquare, Eye, Heart, BarChart3, Users, TrendingUp } from "lucide-react";
+import { MessagesPanel } from "@/components/messages-panel";
+import { RoomRequestsPanel } from "@/components/room-requests-panel";
+import { RoomRequestDialog } from "@/components/room-request-dialog";
+import { BookedRoomsPanel } from "@/components/booked-rooms-panel";
+import { NotificationCount, NotificationDot } from "@/components/notification-dot";
+import { useNotificationSignals } from "@/hooks/use-notification-signals";
+import { Search, MapPin, Home, User as UserIcon, MessageSquare, Eye, Heart, BarChart3, Users, TrendingUp, Calendar, KeyRound } from "lucide-react";
+import type { RoomRequestType } from "@/lib/firestore";
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   if (!user) return <Redirect href="/login" />;
 
   const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening";
@@ -360,7 +378,10 @@ function StatsBar({ user }: { user: UserProfile }) {
 
 function HostDashboard({ user }: { user: UserProfile }) {
   const [listings, setListings] = useState<Listing[]>([])
-  const [seekers, setSeekers] = useState<UserProfile[]>([])
+  const [interestEntries, setInterestEntries] = useState<HostInterestEntry[]>([])
+  const [hostTab, setHostTab] = useState<"listings" | "messages">("listings")
+  const [messageRecipientId, setMessageRecipientId] = useState<string | null>(null)
+  const notifications = useNotificationSignals(user.uid, "host")
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -392,14 +413,14 @@ function HostDashboard({ user }: { user: UserProfile }) {
   useEffect(() => {
     Promise.all([
       listingsApi.getMine().catch(() => []),
-      getInterestedSeekers(user.uid),
+      getHostInterestEntries(user.uid),
       getHostStats(user.uid),
       getInterestedListingIds(user.uid),
       getHostInterests(user.uid),
       getListingsByLocation(user.uid),
-    ]).then(([l, s, stats, interestedIds, interests, locations]) => {
+    ]).then(([l, entries, stats, interestedIds, interests, locations]) => {
       setListings(Array.isArray(l) ? l : [])
-      setSeekers(s)
+      setInterestEntries(entries)
       setHostStats(stats)
       setInterestedListingIds(interestedIds)
       setHostInterests(interests)
@@ -408,7 +429,16 @@ function HostDashboard({ user }: { user: UserProfile }) {
     })
   }, [user.uid])
 
-  const statusTotal = (hostStats?.active ?? 0) + (hostStats?.removed ?? 0)
+  const refreshHostListings = async () => {
+    const [l, stats] = await Promise.all([
+      listingsApi.getMine().catch(() => []),
+      getHostStats(user.uid),
+    ])
+    setListings(Array.isArray(l) ? l : [])
+    setHostStats(stats)
+  }
+
+  const statusTotal = (hostStats?.active ?? 0) + (hostStats?.booked ?? 0) + (hostStats?.removed ?? 0)
   const rentChartData = listings.map((listing) => ({
     label: `${listing.suburb}, ${listing.state}`,
     value: listing.rentPerWeek,
@@ -466,6 +496,49 @@ const handleCreateListing = async (e: React.FormEvent) => {
 
   return (
     <div className="space-y-8">
+      <div className="flex gap-2 border-b border-border">
+        <button
+          onClick={() => setHostTab("listings")}
+          className={`px-6 py-3 text-lg font-semibold border-b-2 transition-colors ${
+            hostTab === "listings" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          My Listings
+        </button>
+        <button
+          onClick={() => {
+            setHostTab("messages")
+            notifications.markRequestsSeen()
+          }}
+          className={`px-6 py-3 text-lg font-semibold border-b-2 transition-colors flex items-center gap-2 ${
+            hostTab === "messages" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <MessageSquare className="h-5 w-5" />
+          Messages & Requests
+          {hostTab !== "messages" && notifications.totalSignals > 0 && (
+            <>
+              <NotificationDot />
+              <NotificationCount count={notifications.totalSignals} />
+            </>
+          )}
+        </button>
+      </div>
+
+      {hostTab === "messages" && (
+        <div className="space-y-8">
+          <div>
+            <h2 className="text-2xl font-bold mb-4">Messages</h2>
+            <MessagesPanel user={user} initialRecipientId={messageRecipientId} />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold mb-4">Visit & Booking Requests</h2>
+            <RoomRequestsPanel user={user} role="host" onUpdate={refreshHostListings} />
+          </div>
+        </div>
+      )}
+
+      {hostTab === "listings" && (
       <section className="space-y-6">
         <div className="flex items-center gap-2">
           <BarChart3 className="h-6 w-6 text-primary" />
@@ -473,15 +546,16 @@ const handleCreateListing = async (e: React.FormEvent) => {
         </div>
 
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+            {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
             <DashboardStatCard title="Total Listings" value={hostStats?.total ?? 0} icon={<Home className="h-5 w-5" />} />
             <DashboardStatCard title="Active Rooms" value={hostStats?.active ?? 0} icon={<TrendingUp className="h-5 w-5" />} />
+            <DashboardStatCard title="Booked Rooms" value={hostStats?.booked ?? 0} icon={<KeyRound className="h-5 w-5" />} />
             <DashboardStatCard title="Inactive Rooms" value={hostStats?.removed ?? 0} icon={<BarChart3 className="h-5 w-5" />} />
-            <DashboardStatCard title="Interested Seekers" value={seekers.length} icon={<Users className="h-5 w-5" />} />
+            <DashboardStatCard title="Interests Received" value={interestEntries.length} icon={<Users className="h-5 w-5" />} />
           </div>
         )}
 
@@ -498,8 +572,9 @@ const handleCreateListing = async (e: React.FormEvent) => {
                     centerLabel="Listings"
                     segments={[
                       { value: hostStats.active, color: "#10b981", label: "Active" },
+                      { value: hostStats.booked, color: "#3b82f6", label: "Booked" },
                       { value: hostStats.removed, color: "#ef4444", label: "Inactive" },
-                    ]}
+                    ].filter((segment) => segment.value > 0)}
                   />
                 ) : (
                   <p className="text-sm text-muted-foreground text-center py-8">No listing data yet.</p>
@@ -551,7 +626,9 @@ const handleCreateListing = async (e: React.FormEvent) => {
           </Card>
         )}
       </section>
+      )}
 
+      {hostTab === "listings" && (
       <div className="grid lg:grid-cols-3 gap-8">
       <div className="lg:col-span-2 space-y-8">
         <div className="flex justify-between items-center">
@@ -589,11 +666,16 @@ const handleCreateListing = async (e: React.FormEvent) => {
                       </p>
                     </div>
                     <div className="flex gap-2">
-                      <Badge className="bg-primary/20 text-primary border-none capitalize">
-                        {listing.status}
+                      <Badge className={`border-none capitalize ${getListingStatusBadgeClass(listing.status)}`}>
+                        {getListingStatusLabel(listing.status)}
                       </Badge>
                     </div>
                   </div>
+                  {listing.status === "booked" && (
+                    <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-4">
+                      This room is booked. It is hidden from seekers until you mark it available again.
+                    </p>
+                  )}
                   <div className="grid grid-cols-4 gap-2 my-4 py-4 border-y border-border text-sm">
                     <div><p className="text-muted-foreground">Rent</p><p className="font-bold">${listing.rentPerWeek}/wk</p></div>
                     <div><p className="text-muted-foreground">Bills</p><p className="font-bold">{listing.billsIncluded ? "Yes" : "No"}</p></div>
@@ -610,8 +692,12 @@ const handleCreateListing = async (e: React.FormEvent) => {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={interestedListingIds.has(listing.id)}
+                      disabled={interestedListingIds.has(listing.id) || listing.status === "booked"}
                       onClick={() => {
+                        if (listing.status === "booked") {
+                          toast({ title: "Cannot edit listing", description: "Mark the room available before editing.", variant: "destructive" })
+                          return
+                        }
                         if (interestedListingIds.has(listing.id)) {
                           toast({ title: "Cannot edit listing", description: interestBlockedMessage, variant: "destructive" })
                           return
@@ -667,6 +753,34 @@ const handleCreateListing = async (e: React.FormEvent) => {
                         Mark Inactive
                       </Button>
                     )}
+                    {listing.status === "booked" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            await listingsApi.update(listing.id, { status: "active" })
+                            setListings(listings.map((l) =>
+                              l.id === listing.id ? { ...l, status: "active" } : l
+                            ))
+                            setHostStats((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    active: prev.active + 1,
+                                    booked: prev.booked - 1,
+                                  }
+                                : null
+                            )
+                            toast({ title: "Room available", description: "Your listing is live again for seekers." })
+                          } catch {
+                            toast({ title: "Failed to mark available", variant: "destructive" })
+                          }
+                        }}
+                      >
+                        Mark Available
+                      </Button>
+                    )}
                     {listing.status === "removed" && (
                       <Button
                         variant="outline"
@@ -704,8 +818,12 @@ const handleCreateListing = async (e: React.FormEvent) => {
                       variant="outline"
                       size="sm"
                       className="text-destructive"
-                      disabled={interestedListingIds.has(listing.id)}
+                      disabled={interestedListingIds.has(listing.id) || listing.status === "booked"}
                       onClick={async () => {
+                        if (listing.status === "booked") {
+                          toast({ title: "Cannot delete listing", description: "Mark the room available before deleting.", variant: "destructive" })
+                          return
+                        }
                         if (interestedListingIds.has(listing.id)) {
                           toast({ title: "Cannot delete", description: interestBlockedMessage, variant: "destructive" })
                           return
@@ -720,6 +838,7 @@ const handleCreateListing = async (e: React.FormEvent) => {
                                   ...prev,
                                   total: prev.total - 1,
                                   active: listing.status === "active" ? prev.active - 1 : prev.active,
+                                  booked: listing.status === "booked" ? prev.booked - 1 : prev.booked,
                                   removed: listing.status === "removed" ? prev.removed - 1 : prev.removed,
                                 }
                               : null
@@ -963,7 +1082,7 @@ const handleCreateListing = async (e: React.FormEvent) => {
               <Skeleton className="h-24 rounded-xl" />
               <Skeleton className="h-24 rounded-xl" />
             </div>
-          ) : seekers.length === 0 ? (
+          ) : interestEntries.length === 0 ? (
             <Card className="rounded-2xl border-dashed bg-transparent shadow-none">
               <CardContent className="p-8 text-center text-muted-foreground">
                 <UserIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
@@ -972,11 +1091,12 @@ const handleCreateListing = async (e: React.FormEvent) => {
             </Card>
           ) : (
             <div className="space-y-4">
-              {seekers.map((seeker) => {
-                const interest = hostInterests.find((item) => item.seekerId === seeker.uid)
-                const interestedListing = listings.find((listing) => listing.id === interest?.listingId)
+              {interestEntries.map((entry) => {
+                const seeker = entry.seeker
+                if (!seeker) return null
+
                 return (
-                  <Card key={seeker.uid} className="rounded-xl border-border/50 transition-all hover:shadow-md">
+                  <Card key={`${entry.interest.seekerId}_${entry.interest.listingId}`} className="rounded-xl border-border/50 transition-all hover:shadow-md">
                     <CardContent className="p-4 space-y-3">
                       <div className="flex items-center gap-4">
                         <div className="h-14 w-14 rounded-full bg-muted overflow-hidden shrink-0">
@@ -993,16 +1113,30 @@ const handleCreateListing = async (e: React.FormEvent) => {
                               <Badge className="bg-green-500/20 text-green-700 border-none text-xs shrink-0">Verified</Badge>
                             )}
                           </div>
-                          {interestedListing && (
+                          {entry.listing && (
                             <p className="text-sm text-muted-foreground truncate">
-                              Interested in: {interestedListing.suburb}, {interestedListing.state}
+                              Interested in: {entry.listing.suburb}, {entry.listing.state}
                             </p>
                           )}
                         </div>
                       </div>
-                      <Button variant="outline" size="sm" className="w-full" onClick={() => setSelectedSeeker(seeker)}>
-                        View Profile
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1"
+                          onClick={() => {
+                            setMessageRecipientId(seeker.uid)
+                            setHostTab("messages")
+                          }}
+                        >
+                          <MessageSquare className="h-4 w-4 mr-1" />
+                          Message
+                        </Button>
+                        <Button variant="outline" size="sm" className="flex-1" onClick={() => setSelectedSeeker(seeker)}>
+                          Profile
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 )
@@ -1012,6 +1146,7 @@ const handleCreateListing = async (e: React.FormEvent) => {
         </div>
       </div>
       </div>
+      )}
 
       {/* Seeker Profile Modal */}
       {selectedSeeker && (
@@ -1119,7 +1254,15 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
   const [interestedRooms, setInterestedRooms] = useState<SeekerInterest[]>([]);
   const [seekerStats, setSeekerStats] = useState<SeekerStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"browse" | "favourites" | "interests">("browse");
+  const [activeTab, setActiveTab] = useState<"browse" | "favourites" | "interests" | "booked" | "messages">("browse");
+  const [bookedCount, setBookedCount] = useState(0);
+  const [messageRecipientId, setMessageRecipientId] = useState<string | null>(null);
+  const [requestDialog, setRequestDialog] = useState<{
+    open: boolean;
+    type: RoomRequestType;
+    listing: Listing | null;
+  }>({ open: false, type: "visit", listing: null });
+  const notifications = useNotificationSignals(user.uid, "seeker");
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [expressing, setExpressing] = useState<string | null>(null);
@@ -1135,12 +1278,14 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
       getListingsByLocation(),
       getSeekerInterests(user.uid),
       getSeekerStats(user.uid),
-    ]).then(([l, s, loc, interests, stats]) => {
+      getSeekerBookedRooms(user.uid),
+    ]).then(([l, s, loc, interests, stats, booked]) => {
       setListings(l);
       setSavedIds(s);
       setLocations(loc);
       setInterestedRooms(interests);
       setSeekerStats(stats);
+      setBookedCount(booked.length);
       setLoading(false);
     });
   }, [user.uid]);
@@ -1176,19 +1321,22 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
   const handleExpressInterest = async (listing: Listing) => {
     setExpressing(listing.id);
     try {
-      await expressInterest(user.uid, listing.hostId, listing.id);
+      await expressInterest(user.uid, listing.hostId, listing.id, {
+        seekerName: user.fullName,
+        listingLabel: `${listing.roomSize} room in ${listing.suburb}, ${listing.state}`,
+      });
       const newInterest: SeekerInterest = {
         listingId: listing.id,
         hostId: listing.hostId,
         createdAt: new Date().toISOString(),
         listing,
       };
-      const hadHostInterest = interestedRooms.some((interest) => interest.hostId === listing.hostId);
+      const hadListingInterest = interestedRooms.some((interest) => interest.listingId === listing.id);
       setInterestedRooms((prev) => [
-        ...prev.filter((interest) => interest.hostId !== listing.hostId),
+        ...prev.filter((interest) => interest.listingId !== listing.id),
         newInterest,
       ]);
-      if (!hadHostInterest) {
+      if (!hadListingInterest) {
         setSeekerStats((stats) => stats ? { ...stats, interestCount: stats.interestCount + 1 } : stats);
       }
       toast({
@@ -1196,10 +1344,10 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
         description: `${listing.hostName} has been notified. They will reach out to you soon.`,
       });
       setSelectedListing(null);
-    } catch {
+    } catch (error) {
       toast({
         title: "Failed to express interest",
-        description: "Please try again.",
+        description: error instanceof Error ? error.message : "Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -1269,6 +1417,42 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
             <span className="bg-primary text-primary-foreground text-sm rounded-full px-2 py-0.5">
               {interestedRooms.length}
             </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab("booked")}
+          className={`px-6 py-3 text-lg font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${
+            activeTab === "booked"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <KeyRound className="h-5 w-5" />
+          Booked Rooms
+          {bookedCount > 0 && (
+            <span className="bg-green-500 text-white text-sm rounded-full px-2 py-0.5">
+              {bookedCount}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab("messages");
+            notifications.markRequestsSeen();
+          }}
+          className={`px-6 py-3 text-lg font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${
+            activeTab === "messages"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <MessageSquare className="h-5 w-5" />
+          Messages
+          {activeTab !== "messages" && notifications.totalSignals > 0 && (
+            <>
+              <NotificationDot />
+              <NotificationCount count={notifications.totalSignals} />
+            </>
           )}
         </button>
       </div>
@@ -1400,11 +1584,65 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
                   key={`${interest.hostId}_${interest.listingId}`}
                   interest={interest}
                   onView={() => interest.listing && setSelectedListing(interest.listing)}
+                  onMessage={() => {
+                    setMessageRecipientId(interest.hostId);
+                    setActiveTab("messages");
+                  }}
+                  onRequestVisit={() =>
+                    interest.listing &&
+                    setRequestDialog({ open: true, type: "visit", listing: interest.listing })
+                  }
+                  onRequestBook={() =>
+                    interest.listing &&
+                    setRequestDialog({ open: true, type: "book", listing: interest.listing })
+                  }
                 />
               ))}
             </div>
           )}
         </>
+      )}
+
+      {/* Booked Rooms Tab */}
+      {activeTab === "booked" && (
+        <>
+          <div>
+            <h2 className="text-2xl font-bold mb-2">My Booked Rooms</h2>
+            <p className="text-muted-foreground mb-6">
+              Rooms you have booked with simulated payment. Confirmed bookings are ready for move-in.
+            </p>
+            <BookedRoomsPanel user={user} onCountChange={setBookedCount} />
+          </div>
+        </>
+      )}
+
+      {/* Messages Tab */}
+      {activeTab === "messages" && (
+        <div className="space-y-8">
+          <div>
+            <h2 className="text-2xl font-bold mb-4">Messages</h2>
+            <MessagesPanel user={user} initialRecipientId={messageRecipientId} />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold mb-4">My Visit & Booking Requests</h2>
+            <RoomRequestsPanel user={user} role="seeker" />
+          </div>
+        </div>
+      )}
+
+      {requestDialog.listing && (
+        <RoomRequestDialog
+          open={requestDialog.open}
+          onOpenChange={(open) => setRequestDialog((prev) => ({ ...prev, open }))}
+          type={requestDialog.type}
+          listing={requestDialog.listing}
+          seekerId={user.uid}
+          seekerName={user.fullName}
+          onSuccess={async () => {
+            const booked = await getSeekerBookedRooms(user.uid);
+            setBookedCount(booked.length);
+          }}
+        />
       )}
 
       {/* Favourites Tab */}
@@ -1607,18 +1845,66 @@ function SeekerDashboard({ user }: { user: UserProfile }) {
                 <Button
                   className="flex-1 h-14 text-lg rounded-xl"
                   onClick={() => handleExpressInterest(selectedListing)}
-                  disabled={expressing === selectedListing.id || expressedListingIds.has(selectedListing.id)}
+                  disabled={
+                    expressing === selectedListing.id ||
+                    expressedListingIds.has(selectedListing.id) ||
+                    selectedListing.status !== "active"
+                  }
                 >
                   {expressing === selectedListing.id ? (
                     <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                   ) : null}
-                  {expressedListingIds.has(selectedListing.id) ? "Interest Sent" : "Express Interest"}
+                  {selectedListing.status === "booked"
+                    ? "Room Booked"
+                    : expressedListingIds.has(selectedListing.id)
+                      ? "Interest Sent"
+                      : "Express Interest"}
                 </Button>
               </div>
 
-              <p className="text-sm text-muted-foreground text-center">
-                When you express interest the host will be notified and can reach out to you directly.
-              </p>
+              {expressedListingIds.has(selectedListing.id) ? (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-xl"
+                    onClick={() => {
+                      setMessageRecipientId(selectedListing.hostId);
+                      setSelectedListing(null);
+                      setActiveTab("messages");
+                    }}
+                  >
+                    <MessageSquare className="h-4 w-4 mr-2" />
+                    Message Host
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-xl"
+                    disabled={selectedListing.status !== "active"}
+                    onClick={() => {
+                      setRequestDialog({ open: true, type: "visit", listing: selectedListing });
+                      setSelectedListing(null);
+                    }}
+                  >
+                    <Calendar className="h-4 w-4 mr-2" />
+                    Visit Room
+                  </Button>
+                  <Button
+                    className="h-12 rounded-xl"
+                    disabled={selectedListing.status !== "active"}
+                    onClick={() => {
+                      setRequestDialog({ open: true, type: "book", listing: selectedListing });
+                      setSelectedListing(null);
+                    }}
+                  >
+                    <Home className="h-4 w-4 mr-2" />
+                    {selectedListing.status === "booked" ? "Room Booked" : "Book Room"}
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center">
+                  When you express interest the host will be notified and can reach out to you directly.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -1649,6 +1935,20 @@ function DashboardStatCard({
       </CardContent>
     </Card>
   );
+}
+
+function getListingStatusLabel(status: Listing["status"]): string {
+  if (status === "active") return "Active";
+  if (status === "booked") return "Booked";
+  if (status === "removed") return "Inactive";
+  return status;
+}
+
+function getListingStatusBadgeClass(status: Listing["status"]): string {
+  if (status === "active") return "bg-green-500/20 text-green-700";
+  if (status === "booked") return "bg-blue-500/20 text-blue-700";
+  if (status === "removed") return "bg-red-500/20 text-red-700";
+  return "bg-primary/20 text-primary";
 }
 
 function DonutChart({
@@ -1747,9 +2047,15 @@ function HorizontalBarChart({
 function InterestListingCard({
   interest,
   onView,
+  onMessage,
+  onRequestVisit,
+  onRequestBook,
 }: {
   interest: SeekerInterest;
   onView: () => void;
+  onMessage: () => void;
+  onRequestVisit: () => void;
+  onRequestBook: () => void;
 }) {
   const listing = interest.listing;
 
@@ -1777,14 +2083,8 @@ function InterestListingCard({
             <Home className="h-10 w-10 text-muted-foreground opacity-30" />
           </div>
         )}
-        <Badge
-          className={`absolute top-3 left-3 border-none ${
-            listing.status === "active"
-              ? "bg-green-500/90 text-white"
-              : "bg-amber-500/90 text-white"
-          }`}
-        >
-          {listing.status === "active" ? "Active" : "Inactive"}
+        <Badge className={`absolute top-3 left-3 border-none ${getListingStatusBadgeClass(listing.status)}`}>
+          {getListingStatusLabel(listing.status)}
         </Badge>
       </div>
       <CardContent className="p-5 flex-1 flex flex-col">
@@ -1795,6 +2095,11 @@ function InterestListingCard({
         <p className="text-sm text-muted-foreground mb-4">
           Interest sent on {new Date(interest.createdAt).toLocaleDateString("en-AU")}
         </p>
+        {listing.status === "booked" && (
+          <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-4">
+            This room has been booked and is no longer accepting new applications.
+          </p>
+        )}
         <div className="mt-auto flex items-center justify-between gap-3">
           <div>
             <p className="text-sm text-muted-foreground">Host</p>
@@ -1802,9 +2107,32 @@ function InterestListingCard({
           </div>
           <p className="font-bold text-lg">${listing.rentPerWeek}/wk</p>
         </div>
-        <Button variant="outline" className="w-full mt-4 rounded-xl" onClick={onView}>
-          View Details
-        </Button>
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          <Button variant="outline" className="rounded-xl" onClick={onMessage}>
+            <MessageSquare className="h-4 w-4 mr-1" />
+            Message
+          </Button>
+          <Button variant="outline" className="rounded-xl" onClick={onView}>
+            Details
+          </Button>
+          <Button
+            variant="outline"
+            className="rounded-xl"
+            onClick={onRequestVisit}
+            disabled={listing.status !== "active"}
+          >
+            <Calendar className="h-4 w-4 mr-1" />
+            Visit Room
+          </Button>
+          <Button
+            className="rounded-xl"
+            onClick={onRequestBook}
+            disabled={listing.status !== "active"}
+          >
+            <Home className="h-4 w-4 mr-1" />
+            {listing.status === "booked" ? "Room Booked" : "Book Room"}
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

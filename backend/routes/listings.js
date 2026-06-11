@@ -198,15 +198,31 @@ router.put("/:id", verifyToken, upload.array("photos", 5), async (req, res) => {
       })
     }
 
+    const currentStatus = doc.data().status
+
     if (updateData.status === "removed") {
+      if (currentStatus === "booked") {
+        return res.status(409).json({ error: "Cannot mark a booked listing as inactive. Mark it available first." })
+      }
       await deleteSavedListingsForListing(listingId)
       await db.collection("listings").doc(listingId).update({ status: "removed" })
       return res.json({ message: "Listing marked as inactive" })
     }
 
     if (updateData.status === "active") {
-      await db.collection("listings").doc(listingId).update({ status: "active" })
+      await db.collection("listings").doc(listingId).update({
+        status: "active",
+        bookedAt: null,
+        bookedBySeekerId: null,
+        bookedRequestId: null,
+      })
       return res.json({ message: "Listing marked as active" })
+    }
+
+    if (currentStatus === "booked") {
+      return res.status(409).json({
+        error: "Cannot modify a booked listing. Mark it available first.",
+      })
     }
 
     // Upload new photos if provided
@@ -247,6 +263,12 @@ router.delete("/:id", verifyToken, async (req, res) => {
     }
     if (doc.data().hostId !== req.user.uid) {
       return res.status(403).json({ error: "Not authorised" })
+    }
+
+    if (doc.data().status === "booked") {
+      return res.status(409).json({
+        error: "Cannot delete a booked listing. Mark it available first.",
+      })
     }
 
     if (await hasListingInterests(req.params.id)) {

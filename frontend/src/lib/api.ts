@@ -139,3 +139,76 @@ export const verificationApi = {
     body: JSON.stringify({ status: "rejected" }),
   }),
 }
+
+// ─── Messages API ──────────────────────────────────────────────────────────────
+
+export const messagesApi = {
+  getConversations: async () => {
+    const response = await apiFetch("/messages/conversations")
+    return response.conversations || []
+  },
+
+  getMessages: async (conversationId: string) => {
+    const response = await apiFetch(`/messages/conversations/${conversationId}/messages`)
+    return response.messages || []
+  },
+
+  send: (data: {
+    recipientId: string
+    content: string
+    senderName: string
+    listingId?: string
+    listingLabel?: string
+  }) =>
+    apiFetch("/messages/send", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  ensureConversation: (data: {
+    recipientId: string
+    listingId?: string
+    listingLabel?: string
+  }) =>
+    apiFetch("/messages/conversations/ensure", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+}
+
+// ─── Room Requests API ─────────────────────────────────────────────────────────
+
+export const roomRequestsApi = {
+  getMine: async (role: "host" | "seeker") => {
+    const response = await apiFetch(`/room-requests?role=${role}`)
+    return response.requests || []
+  },
+
+  create: (data: {
+    hostId: string
+    listingId: string
+    listingLabel: string
+    type: "visit" | "book"
+    scheduledDate: string
+    scheduledTime: string
+    notes?: string | null
+    seekerName: string
+    paymentStatus?: "paid"
+    rentPerWeek?: number
+    rentWeeks?: number
+    firstWeekRent?: number
+    bondAmount?: number
+    totalPaid?: number
+    paidAt?: string
+  }) =>
+    apiFetch("/room-requests", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateStatus: (id: string, status: "confirmed" | "declined" | "cancelled") =>
+    apiFetch(`/room-requests/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+}

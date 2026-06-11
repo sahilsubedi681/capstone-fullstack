@@ -13,9 +13,11 @@ import {
   serverTimestamp,
   increment,
   Timestamp,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { UserProfile } from "./auth";
+import { messagesApi, roomRequestsApi } from "./api";
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 
@@ -71,8 +73,11 @@ export interface Listing {
   houseRules?: string | null;
   photoUrl?: string | null;
   photoUrls?: string[] | null;
-  status: "active" | "pending" | "removed";
+  status: "active" | "pending" | "removed" | "booked";
   createdAt: string;
+  bookedAt?: string | null;
+  bookedBySeekerId?: string | null;
+  bookedRequestId?: string | null;
 }
 
 export async function createListing(data: Omit<Listing, "id" | "createdAt">): Promise<Listing> {
@@ -120,7 +125,7 @@ export async function removeListing(listingId: string): Promise<void> {
   await deleteDoc(doc(db, "listings", listingId));
 }
 
-export async function updateListingStatus(id: string, status: "active" | "removed"): Promise<void> {
+export async function updateListingStatus(id: string, status: "active" | "removed" | "booked"): Promise<void> {
   if (status === "removed") {
     await deleteSavedListingsForListing(id);
     await updateDoc(doc(db, "listings", id), { status: "removed" });
@@ -189,9 +194,41 @@ export async function getSavedListings(userId: string): Promise<Listing[]> {
 
 // ─── Interests ────────────────────────────────────────────────────────────────
 
-export async function expressInterest(seekerId: string, hostId: string, listingId?: string): Promise<void> {
-  const ref = doc(db, "interests", `${seekerId}_${hostId}`);
-  await setDoc(ref, { seekerId, hostId, listingId: listingId || null, createdAt: new Date().toISOString() });
+export async function expressInterest(
+  seekerId: string,
+  hostId: string,
+  listingId: string,
+  options?: { seekerName?: string; listingLabel?: string }
+): Promise<void> {
+  const listingSnap = await getDoc(doc(db, "listings", listingId));
+  if (!listingSnap.exists() || listingSnap.data()?.status !== "active") {
+    throw new Error("This room is no longer available.");
+  }
+
+  const ref = doc(db, "interests", `${seekerId}_${listingId}`);
+  await setDoc(ref, {
+    seekerId,
+    hostId,
+    listingId,
+    createdAt: new Date().toISOString(),
+  });
+
+  const listingLabel = options?.listingLabel || "your room";
+  await ensureConversation(seekerId, hostId, { listingId, listingLabel });
+
+  if (options?.seekerName) {
+    await sendMessage(
+      seekerId,
+      options.seekerName,
+      hostId,
+      `Hi, I expressed interest in ${listingLabel}. I would love to connect about this room.`
+    );
+  }
+}
+
+export async function hasSeekerExpressedInterest(seekerId: string, listingId: string): Promise<boolean> {
+  const snap = await getDoc(doc(db, "interests", `${seekerId}_${listingId}`));
+  return snap.exists();
 }
 
 export async function hasListingInterests(listingId: string): Promise<boolean> {
@@ -281,11 +318,37 @@ export async function updateUserVerification(uid: string, verified: boolean): Pr
   await updateDoc(doc(db, "users", uid), { verified });
 }
 
+export interface HostInterestEntry {
+  interest: InterestRecord;
+  seeker: UserProfile | null;
+  listing: Listing | null;
+}
+
+export async function getHostInterestEntries(hostId: string): Promise<HostInterestEntry[]> {
+  const interests = await getHostInterests(hostId);
+
+  return Promise.all(
+    interests.map(async (interest) => {
+      const [seeker, listingSnap] = await Promise.all([
+        getUserProfile(interest.seekerId),
+        interest.listingId
+          ? getDoc(doc(db, "listings", interest.listingId))
+          : Promise.resolve(null),
+      ]);
+
+      const listing = listingSnap?.exists()
+        ? ({ id: listingSnap.id, ...listingSnap.data() } as Listing)
+        : null;
+
+      return { interest, seeker, listing };
+    })
+  );
+}
+
 export async function getInterestedSeekers(hostId: string): Promise<UserProfile[]> {
-  const q = query(collection(db, "interests"), where("hostId", "==", hostId));
-  const snap = await getDocs(q);
-  const seekerIds = snap.docs.map((d) => d.data().seekerId as string);
-  const seekers = await Promise.all(seekerIds.map((id) => getUserProfile(id)));
+  const interests = await getHostInterests(hostId);
+  const uniqueSeekerIds = [...new Set(interests.map((interest) => interest.seekerId))];
+  const seekers = await Promise.all(uniqueSeekerIds.map((id) => getUserProfile(id)));
   return seekers.filter(Boolean) as UserProfile[];
 }
 
@@ -306,48 +369,214 @@ export interface Conversation {
   participants: string[];
   lastMessage?: string | null;
   lastMessageAt?: string | null;
+  lastSenderId?: string | null;
+  listingId?: string | null;
+  listingLabel?: string | null;
   createdAt: string;
 }
 
-function conversationId(uid1: string, uid2: string): string {
-  return [uid1, uid2].sort().join("_");
+export async function ensureConversation(
+  _userId1: string,
+  userId2: string,
+  meta?: { listingId?: string; listingLabel?: string }
+): Promise<string> {
+  const response = await messagesApi.ensureConversation({
+    recipientId: userId2,
+    listingId: meta?.listingId,
+    listingLabel: meta?.listingLabel,
+  });
+  return response.conversationId;
 }
 
 export async function sendMessage(senderId: string, senderName: string, recipientId: string, content: string): Promise<void> {
-  const convId = conversationId(senderId, recipientId);
-  const convRef = doc(db, "conversations", convId);
-  const convSnap = await getDoc(convRef);
-  if (!convSnap.exists()) {
-    await setDoc(convRef, {
-      participants: [senderId, recipientId],
-      createdAt: new Date().toISOString(),
-      lastMessage: content,
-      lastMessageAt: new Date().toISOString(),
-    });
-  } else {
-    await updateDoc(convRef, { lastMessage: content, lastMessageAt: new Date().toISOString() });
-  }
-  await addDoc(collection(db, "conversations", convId, "messages"), {
-    conversationId: convId,
-    senderId,
-    senderName,
-    content,
-    isRead: false,
-    createdAt: new Date().toISOString(),
-  });
+  await messagesApi.send({ recipientId, content, senderName });
 }
 
-export async function getConversations(userId: string): Promise<Conversation[]> {
-  const q = query(collection(db, "conversations"), where("participants", "array-contains", userId));
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Conversation);
+export async function getConversations(_userId: string): Promise<Conversation[]> {
+  return messagesApi.getConversations();
 }
 
 export async function getMessages(conversationId: string): Promise<Message[]> {
-  const snap = await getDocs(collection(db, "conversations", conversationId, "messages"));
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Message).sort((a, b) =>
-    new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  return messagesApi.getMessages(conversationId);
+}
+
+function sortConversations(conversations: Conversation[]): Conversation[] {
+  return conversations.sort(
+    (a, b) =>
+      new Date(b.lastMessageAt || b.createdAt).getTime() -
+      new Date(a.lastMessageAt || a.createdAt).getTime()
   );
+}
+
+function sortMessages(messages: Message[]): Message[] {
+  return messages.sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+}
+
+export function subscribeToConversations(
+  userId: string,
+  callback: (conversations: Conversation[]) => void
+): () => void {
+  const q = query(collection(db, "conversations"), where("participants", "array-contains", userId));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const conversations = sortConversations(
+        snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Conversation)
+      );
+      callback(conversations);
+    },
+    () => {
+      messagesApi.getConversations().then((conversations) => callback(sortConversations(conversations)));
+    }
+  );
+}
+
+export function subscribeToMessages(
+  conversationId: string,
+  callback: (messages: Message[]) => void
+): () => void {
+  return onSnapshot(
+    collection(db, "conversations", conversationId, "messages"),
+    (snap) => {
+      const messages = sortMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Message));
+      callback(messages);
+    },
+    () => {
+      messagesApi.getMessages(conversationId).then((messages) => callback(sortMessages(messages)));
+    }
+  );
+}
+
+// ─── Room Requests (Visit / Book) ─────────────────────────────────────────────
+
+export type RoomRequestType = "visit" | "book";
+export type RoomRequestStatus = "pending" | "confirmed" | "declined" | "cancelled";
+
+export type PaymentStatus = "paid";
+
+export interface RoomRequest {
+  id: string;
+  seekerId: string;
+  seekerName: string;
+  hostId: string;
+  listingId: string;
+  listingLabel: string;
+  type: RoomRequestType;
+  scheduledDate: string;
+  scheduledTime: string;
+  status: RoomRequestStatus;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+  paymentStatus?: PaymentStatus;
+  rentPerWeek?: number;
+  rentWeeks?: number;
+  firstWeekRent?: number;
+  bondAmount?: number;
+  totalPaid?: number;
+  paidAt?: string;
+}
+
+export interface BookedRoom {
+  request: RoomRequest;
+  listing: Listing | null;
+}
+
+function isPaidBooking(request: RoomRequest): boolean {
+  return (
+    request.type === "book" &&
+    request.paymentStatus === "paid" &&
+    request.status !== "cancelled" &&
+    request.status !== "declined"
+  );
+}
+
+async function enrichBookedRooms(requests: RoomRequest[]): Promise<BookedRoom[]> {
+  const booked = requests.filter(isPaidBooking);
+  return Promise.all(
+    booked.map(async (request) => {
+      const listingSnap = await getDoc(doc(db, "listings", request.listingId));
+      const listing = listingSnap.exists()
+        ? ({ id: listingSnap.id, ...listingSnap.data() } as Listing)
+        : null;
+      return { request, listing };
+    })
+  );
+}
+
+export async function createRoomRequest(
+  data: Omit<RoomRequest, "id" | "status" | "createdAt">
+): Promise<RoomRequest> {
+  const response = await roomRequestsApi.create({
+    hostId: data.hostId,
+    listingId: data.listingId,
+    listingLabel: data.listingLabel,
+    type: data.type,
+    scheduledDate: data.scheduledDate,
+    scheduledTime: data.scheduledTime,
+    notes: data.notes,
+    seekerName: data.seekerName,
+    paymentStatus: data.paymentStatus,
+    rentPerWeek: data.rentPerWeek,
+    rentWeeks: data.rentWeeks,
+    firstWeekRent: data.firstWeekRent,
+    bondAmount: data.bondAmount,
+    totalPaid: data.totalPaid,
+    paidAt: data.paidAt,
+  });
+  return response.request;
+}
+
+export async function getSeekerBookedRooms(seekerId: string): Promise<BookedRoom[]> {
+  const requests = await getUserRoomRequests(seekerId, "seeker");
+  return enrichBookedRooms(requests);
+}
+
+export function subscribeToBookedRooms(
+  seekerId: string,
+  callback: (rooms: BookedRoom[]) => void
+): () => void {
+  return subscribeToRoomRequests(seekerId, "seeker", (requests) => {
+    enrichBookedRooms(requests).then(callback);
+  });
+}
+
+export async function getUserRoomRequests(_userId: string, role: "host" | "seeker"): Promise<RoomRequest[]> {
+  return roomRequestsApi.getMine(role);
+}
+
+export function subscribeToRoomRequests(
+  userId: string,
+  role: "host" | "seeker",
+  callback: (requests: RoomRequest[]) => void
+): () => void {
+  const field = role === "host" ? "hostId" : "seekerId";
+  const q = query(collection(db, "room_requests"), where(field, "==", userId));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const requests = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }) as RoomRequest)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      callback(requests);
+    },
+    () => {
+      roomRequestsApi.getMine(role).then(callback);
+    }
+  );
+}
+
+export async function updateRoomRequestStatus(
+  requestId: string,
+  status: RoomRequestStatus,
+  _actorId: string,
+  _actorName: string,
+  _recipientId: string,
+  _listingLabel: string
+): Promise<void> {
+  await roomRequestsApi.updateStatus(requestId, status);
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────
@@ -404,6 +633,7 @@ export async function getDashboardStats(userId: string, role: string) {
 export interface HostStats {
   total: number;
   active: number;
+  booked: number;
   pending: number;
   removed: number;
   totalViews: number;
@@ -417,6 +647,7 @@ export async function getHostStats(hostId: string): Promise<HostStats> {
   return {
     total: listings.length,
     active: listings.filter((l) => l.status === "active").length,
+    booked: listings.filter((l) => l.status === "booked").length,
     pending: listings.filter((l) => l.status === "pending").length,
     removed: listings.filter((l) => l.status === "removed").length,
     totalViews: 0,

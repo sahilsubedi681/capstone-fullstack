@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useAuth } from "@/lib/auth";
+import { useAuth, getAuthenticatedRedirectPath } from "@/lib/auth";
 import { getUserProfile } from "@/lib/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Mail, CheckCircle2 } from "lucide-react";
@@ -17,9 +17,20 @@ export default function LoginPage() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isMagicLoading, setIsMagicLoading] = useState(false);
 
-  const { signInWithGoogle, sendMagicLink, setUserProfile } = useAuth();
+  const { user, firebaseUser, isLoading, signInWithGoogle, sendMagicLink, setUserProfile } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (user) {
+      setLocation(getAuthenticatedRedirectPath(user));
+      return;
+    }
+    if (firebaseUser) {
+      setLocation("/signup");
+    }
+  }, [isLoading, user, firebaseUser, setLocation]);
 
   const handleGoogleLogin = async () => {
     setIsGoogleLoading(true);
@@ -28,7 +39,7 @@ export default function LoginPage() {
       const profile = await getUserProfile(fbUser.uid);
       if (profile) {
         setUserProfile(profile);
-        setLocation(profile.role === "admin" ? "/admin" : "/dashboard");
+        setLocation(getAuthenticatedRedirectPath(profile));
       } else {
         setLocation("/signup");
       }
@@ -54,6 +65,14 @@ export default function LoginPage() {
       setIsMagicLoading(false);
     }
   };
+
+  if (isLoading || user || firebaseUser) {
+    return (
+      <div className="min-h-[80vh] flex items-center justify-center">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center p-4 py-12">
