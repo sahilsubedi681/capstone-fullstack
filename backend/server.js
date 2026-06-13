@@ -8,6 +8,7 @@ import userRoutes from "./routes/users.js"
 import listingRoutes from "./routes/listings.js"
 import messageRoutes from "./routes/messages.js"
 import roomRequestRoutes from "./routes/roomRequests.js"
+import adminRoutes from "./routes/admin.js"
 
 const app = express()
 app.use(cors())
@@ -27,6 +28,7 @@ app.use("/users", userRoutes)
 app.use("/listings", listingRoutes)
 app.use("/messages", messageRoutes)
 app.use("/room-requests", roomRequestRoutes)
+app.use("/admin", adminRoutes)
 
 const PORT = process.env.PORT || 8000
 

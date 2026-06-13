@@ -21,6 +21,7 @@ export interface UserProfile {
   role: "host" | "seeker" | "admin";
   status: "active" | "suspended";
   verified?: boolean;
+  verificationStatus?: "pending" | "approved" | "rejected";
   age?: number | null;
   dateOfBirth?: string | null;
   gender?: string | null;

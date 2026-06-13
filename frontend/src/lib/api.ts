@@ -212,3 +212,108 @@ export const roomRequestsApi = {
       body: JSON.stringify({ status }),
     }),
 }
+
+// ─── Admin API ─────────────────────────────────────────────────────────────────
+
+export interface AdminStats {
+  totalUsers: number
+  totalHosts: number
+  totalSeekers: number
+  newThisWeek: number
+  totalRoomsAvailable: number
+  totalHostBookings: number
+  confirmedHostBookings: number
+}
+
+export interface AdminUser {
+  uid: string
+  email: string
+  fullName: string
+  role: "host" | "seeker" | "admin"
+  status: "active" | "suspended"
+  verified?: boolean
+  verificationStatus?: "pending" | "approved" | "rejected"
+  createdAt?: string
+}
+
+export interface VerificationRequest {
+  uid: string
+  idType: string
+  idNumber: string
+  dateOfBirth: string
+  phone: string
+  address: string
+  idPhotoUrl: string
+  status: "pending" | "approved" | "rejected"
+  submittedAt: string
+  reviewedAt?: string
+}
+
+export interface AdminUserDetails {
+  user: AdminUser & {
+    phone?: string
+    suburb?: string
+    state?: string
+    bio?: string
+    photoUrl?: string
+    age?: number
+    gender?: string
+  }
+  verificationRequest: VerificationRequest | null
+}
+
+export interface AdminListing {
+  id: string
+  hostName: string
+  suburb: string
+  state: string
+  rentPerWeek: number
+  status: "active" | "pending" | "removed" | "booked"
+}
+
+export interface AdminActivity {
+  id: string
+  type: string
+  description: string
+  createdAt: string
+}
+
+export const adminApi = {
+  getStats: (): Promise<AdminStats> => apiFetch("/admin/stats"),
+
+  getUsers: async (): Promise<AdminUser[]> => {
+    const response = await apiFetch("/admin/users")
+    return response.users || []
+  },
+
+  getUserDetails: (uid: string): Promise<AdminUserDetails> =>
+    apiFetch(`/admin/users/${uid}/details`),
+
+  verifyUser: (uid: string, verified: boolean) =>
+    apiFetch(`/admin/users/${uid}/verify`, {
+      method: "PATCH",
+      body: JSON.stringify({ verified }),
+    }),
+
+  updateUserStatus: (uid: string, status: "active" | "suspended") =>
+    apiFetch(`/admin/users/${uid}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+
+  getListings: async (): Promise<AdminListing[]> => {
+    const response = await apiFetch("/admin/listings")
+    return response.listings || []
+  },
+
+  updateListingStatus: (id: string, status: "active" | "removed") =>
+    apiFetch(`/admin/listings/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+
+  getActivity: async (): Promise<AdminActivity[]> => {
+    const response = await apiFetch("/admin/activity")
+    return response.activities || []
+  },
+}

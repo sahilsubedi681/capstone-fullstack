@@ -2,7 +2,7 @@ import express from "express"
 import multer from "multer"
 import axios from "axios"
 import FormData from "form-data"
-import { verifyToken } from "../middleware/auth.js"
+import { verifyToken, requireAdmin } from "../middleware/auth.js"
 import { db } from "../config/firebase.js"
 
 const router = express.Router()
@@ -10,7 +10,7 @@ const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })
 const IMGBB_API_KEY = process.env.IMGBB_API_KEY
 // Get all users
-router.get("/all", verifyToken, async (req, res) => {
+router.get("/all", verifyToken, requireAdmin, async (req, res) => {
   try {
     const snapshot = await db.collection("users").get()
     const users = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
@@ -71,7 +71,7 @@ router.post("/verify", verifyToken, upload.single("idPhoto"), async (req, res) =
 })
 
 // Get all verification requests (admin)
-router.get("/verify/all", verifyToken, async (req, res) => {
+router.get("/verify/all", verifyToken, requireAdmin, async (req, res) => {
   try {
     const snapshot = await db.collection("verification_requests").get()
     const requests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
@@ -94,7 +94,7 @@ router.get("/verify/status", verifyToken, async (req, res) => {
 })
 
 // Approve or reject verification (admin)
-router.put("/verify/:uid", verifyToken, async (req, res) => {
+router.put("/verify/:uid", verifyToken, requireAdmin, async (req, res) => {
   try {
     const { status } = req.body
 
