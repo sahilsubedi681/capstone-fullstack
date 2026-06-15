@@ -8,6 +8,10 @@ import {
 } from "lucide-react";
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
+import { getListings } from "@/lib/firestore";
+import { useAuth } from "@/lib/auth";
+import { useLocation } from "wouter";
+import { useState, useEffect } from "react";
 
 /* ─── Animations ─────────────────────────────────────────── */
 const fadeUp = (delay = 0) => ({
@@ -24,87 +28,185 @@ const fadeIn = (delay = 0) => ({
   transition: { duration: 0.5, delay },
 });
 
-/* ─── Static room data ───────────────────────────────────── */
-const rooms = [
-  {
-    id: 1,
-    img: "https://images.unsplash.com/photo-1631049307264-da0ec9d70304?q=80&w=800&auto=format&fit=crop",
-    title: "Sunny Double Room",
-    suburb: "Brighton", state: "VIC",
-    rent: 280,
-    bathroom: "Private",
-    hostName: "Margaret W.",
-    hostAge: 68,
-    hostImg: "https://i.pravatar.cc/150?u=margaret2",
-    bills: true, wifi: true, parking: false, pets: false,
-    badge: "Popular",
-  },
-  {
-    id: 2,
-    img: "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?q=80&w=800&auto=format&fit=crop",
-    title: "Quiet Single Room",
-    suburb: "Manly", state: "NSW",
-    rent: 220,
-    bathroom: "Shared",
-    hostName: "David H.",
-    hostAge: 71,
-    hostImg: "https://i.pravatar.cc/150?u=david3",
-    bills: false, wifi: true, parking: true, pets: false,
-    badge: "New",
-  },
-  {
-    id: 3,
-    img: "https://images.unsplash.com/photo-1598928506311-c55ded91a20c?q=80&w=800&auto=format&fit=crop",
-    title: "Large Double Room",
-    suburb: "New Farm", state: "QLD",
-    rent: 300,
-    bathroom: "Private",
-    hostName: "Barbara L.",
-    hostAge: 65,
-    hostImg: "https://i.pravatar.cc/150?u=barbara4",
-    bills: true, wifi: true, parking: true, pets: true,
-    badge: "Pet Friendly",
-  },
-  {
-    id: 4,
-    img: "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?q=80&w=800&auto=format&fit=crop",
-    title: "Cosy Furnished Room",
-    suburb: "Glenelg", state: "SA",
-    rent: 195,
-    bathroom: "Shared",
-    hostName: "Ronald B.",
-    hostAge: 74,
-    hostImg: "https://i.pravatar.cc/150?u=ronald5",
-    bills: true, wifi: true, parking: false, pets: false,
-    badge: "Best Value",
-  },
-  {
-    id: 5,
-    img: "https://images.unsplash.com/photo-1616594039964-ae9021a400a0?q=80&w=800&auto=format&fit=crop",
-    title: "Garden-View Room",
-    suburb: "Cottesloe", state: "WA",
-    rent: 260,
-    bathroom: "Shared",
-    hostName: "Helen M.",
-    hostAge: 66,
-    hostImg: "https://i.pravatar.cc/150?u=helen6",
-    bills: false, wifi: true, parking: true, pets: true,
-    badge: null,
-  },
-  {
-    id: 6,
-    img: "https://images.unsplash.com/photo-1484101403633-562f891dc89a?q=80&w=800&auto=format&fit=crop",
-    title: "Spacious Queen Room",
-    suburb: "Sandy Bay", state: "TAS",
-    rent: 240,
-    bathroom: "Private",
-    hostName: "John P.",
-    hostAge: 70,
-    hostImg: "https://i.pravatar.cc/150?u=john7",
-    bills: true, wifi: false, parking: true, pets: false,
-    badge: null,
-  },
-];
+// Then replace your BrowseRoomsSection with this:
+
+function BrowseRoomsSection() {
+  const { user } = useAuth();
+  const [, setLocation] = useLocation();
+  const [listings, setListings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchListings = async () => {
+      try {
+        setLoading(true);
+        const data = await getListings();
+        setListings(data.slice(0, 6)); // Show first 6 listings
+      } catch (error) {
+        console.error("Error fetching listings:", error);
+        setListings([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchListings();
+  }, []);
+
+  const handleViewRoom = (roomId: string) => {
+    if (user) {
+      setLocation(`/dashboard?room=${roomId}`);
+    } else {
+      // Store the intended room to redirect after login
+      sessionStorage.setItem("redirectAfterLogin", `/dashboard?room=${roomId}`);
+      setLocation("/login");
+    }
+  };
+
+  const handleSeeAllRooms = () => {
+    if (user) {
+      setLocation("/dashboard?tab=listings");
+    } else {
+      sessionStorage.setItem("redirectAfterLogin", "/dashboard?tab=listings");
+      setLocation("/login");
+    }
+  };
+
+  const handleCreateAccount = () => {
+    sessionStorage.setItem("redirectAfterLogin", "/dashboard");
+    setLocation("/signup");
+  };
+
+  if (loading) {
+    return (
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <div key={i} className="rounded-2xl border border-border/50 overflow-hidden animate-pulse">
+            <div className="h-52 bg-muted" />
+            <div className="p-5 space-y-3">
+              <div className="h-5 bg-muted rounded w-3/4" />
+              <div className="h-4 bg-muted rounded w-1/2" />
+              <div className="flex gap-2 mt-4">
+                <div className="h-6 bg-muted rounded w-16" />
+                <div className="h-6 bg-muted rounded w-20" />
+              </div>
+              <div className="h-10 bg-muted rounded mt-4" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (listings.length === 0) {
+    return (
+      <div className="text-center py-16 text-muted-foreground">
+        <p className="text-xl mb-4">No rooms available yet.</p>
+        <Link href="/signup">
+          <Button className="rounded-full px-8">Be the first to list a room</Button>
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {listings.map((listing, i) => (
+          <motion.div key={listing.id} {...fadeUp(i * 0.07)}>
+            <Card className="rounded-2xl border-border/50 shadow-sm overflow-hidden flex flex-col h-full group hover:shadow-lg transition-shadow duration-300">
+              <div className="relative h-52 overflow-hidden">
+                {listing.photoUrl ? (
+                  <img
+                    src={listing.photoUrl}
+                    alt={listing.roomSize + " room in " + listing.suburb}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = "/placeholder-room.jpg";
+                    }}
+                  />
+                ) : (
+                  <div className="w-full h-full bg-muted flex items-center justify-center">
+                    <Home className="h-12 w-12 text-muted-foreground opacity-30" />
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
+                {listing.bathroomType === "private" && (
+                  <div className="absolute top-3 left-3 bg-primary text-primary-foreground text-xs px-3 py-1 rounded-full">
+                    Private Room
+                  </div>
+                )}
+                <div className="absolute bottom-3 right-3 bg-background/95 backdrop-blur rounded-full px-4 py-1.5 font-bold text-foreground shadow-sm flex items-center gap-1">
+                  <DollarSign className="h-4 w-4 text-primary" />
+                  {listing.rentPerWeek}
+                  <span className="text-muted-foreground font-normal text-sm">/wk</span>
+                </div>
+              </div>
+              <CardContent className="p-5 flex-1 flex flex-col">
+                <h3 className="text-xl font-bold mb-1 capitalize">
+                  {listing.roomSize === "single" ? "Single Room" : "Double Room"}
+                </h3>
+                <p className="text-muted-foreground flex items-center gap-1.5 text-sm mb-3">
+                  <MapPin className="h-4 w-4 shrink-0" /> {listing.suburb}, {listing.state}
+                </p>
+                <div className="flex flex-wrap gap-2 mb-4">
+                  <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium capitalize">
+                    🛁 {listing.bathroomType === "private" ? "Private Bath" : "Shared Bath"}
+                  </span>
+                  {listing.billsIncluded && (
+                    <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium">
+                      💡 Bills incl.
+                    </span>
+                  )}
+                  {listing.furnished && (
+                    <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium">
+                      🛋️ Furnished
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 mt-auto pt-4 border-t border-border/50">
+                  <img
+                    src={listing.hostPhotoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(listing.hostName)}&background=random`}
+                    alt={listing.hostName}
+                    className="w-10 h-10 rounded-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(listing.hostName)}&background=random`;
+                    }}
+                  />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold">{listing.hostName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Host · Age {listing.hostAge || "55+"}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="rounded-full text-sm px-4"
+                    onClick={() => handleViewRoom(listing.id)}
+                  >
+                    View
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      <motion.div className="text-center mt-12" {...fadeUp(0.3)}>
+        <Button
+          size="lg"
+          className="text-lg rounded-full px-10 shadow-lg shadow-primary/20"
+          onClick={!user ? handleCreateAccount : handleSeeAllRooms}
+        >
+          {!user 
+            ? "Create Free Account to See All Rooms" 
+            : "Go to Dashboard to See All Rooms"}
+        </Button>
+      </motion.div>
+    </>
+  );
+}
 
 /* ─── Testimonials ───────────────────────────────────────── */
 const testimonials = [
@@ -320,88 +422,35 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── Browse Rooms ── */}
-      <section className="py-20 lg:py-28 bg-background">
-        <div className="container mx-auto px-4 md:px-8 max-w-screen-xl">
-          <motion.div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-14" {...fadeUp()}>
-            <div>
-              <p className="text-primary font-semibold uppercase tracking-wider mb-3">Available Now</p>
-              <h2 className="text-3xl md:text-5xl font-bold text-foreground">Browse a Room</h2>
-              <p className="text-xl text-muted-foreground mt-3">Real rooms from verified hosts across Australia.</p>
-            </div>
-            <Link href="/signup">
-              <Button variant="outline" size="lg" className="rounded-full px-6 shrink-0">
-                See All Rooms <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </Link>
-          </motion.div>
+   {/* ── Browse Rooms ── */}
+<section className="py-20 lg:py-28 bg-background">
+  <div className="container mx-auto px-4 md:px-8 max-w-screen-xl">
+    <motion.div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-14" {...fadeUp()}>
+      <div>
+        <p className="text-primary font-semibold uppercase tracking-wider mb-3">Available Now</p>
+        <h2 className="text-3xl md:text-5xl font-bold text-foreground">Browse a Room</h2>
+        <p className="text-xl text-muted-foreground mt-3">Real rooms from verified hosts across Australia.</p>
+      </div>
+      <Button 
+        variant="outline" 
+        size="lg" 
+        className="rounded-full px-6 shrink-0"
+        onClick={() => {
+          if (user) {
+            setLocation("/dashboard?tab=listings");
+          } else {
+            sessionStorage.setItem("redirectAfterLogin", "/dashboard?tab=listings");
+            setLocation("/login");
+          }
+        }}
+      >
+        See All Rooms <ArrowRight className="ml-2 h-4 w-4" />
+      </Button>
+    </motion.div>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {rooms.map((room, i) => (
-              <motion.div key={room.id} {...fadeUp(i * 0.07)}>
-                <Card className="rounded-2xl border-border/50 shadow-sm overflow-hidden flex flex-col h-full group hover:shadow-lg transition-shadow duration-300">
-                  {/* Image */}
-                  <div className="relative h-52 overflow-hidden">
-                    <img
-                      src={room.img}
-                      alt={room.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-                    {room.badge && (
-                      <Badge className="absolute top-3 left-3 bg-primary text-primary-foreground border-none text-sm px-3 py-1">
-                        {room.badge}
-                      </Badge>
-                    )}
-                    <div className="absolute bottom-3 right-3 bg-background/95 backdrop-blur rounded-full px-4 py-1.5 font-bold text-foreground shadow-sm flex items-center gap-1">
-                      <DollarSign className="h-4 w-4 text-primary" />
-                      {room.rent}<span className="text-muted-foreground font-normal text-sm">/wk</span>
-                    </div>
-                  </div>
-
-                  <CardContent className="p-5 flex-1 flex flex-col">
-                    <h3 className="text-xl font-bold mb-1">{room.title}</h3>
-                    <p className="text-muted-foreground flex items-center gap-1.5 text-sm mb-3">
-                      <MapPin className="h-4 w-4 shrink-0" /> {room.suburb}, {room.state}
-                    </p>
-
-                    {/* Amenity chips */}
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium">
-                        🛁 {room.bathroom}
-                      </span>
-                      {room.bills && <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium">💡 Bills incl.</span>}
-                      {room.wifi && <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium"><Wifi className="h-3.5 w-3.5" /> WiFi</span>}
-                      {room.parking && <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium"><Car className="h-3.5 w-3.5" /> Parking</span>}
-                      {room.pets && <span className="inline-flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-sm font-medium"><PawPrint className="h-3.5 w-3.5" /> Pets OK</span>}
-                    </div>
-
-                    {/* Host */}
-                    <div className="flex items-center gap-3 mt-auto pt-4 border-t border-border/50">
-                      <img src={room.hostImg} alt={room.hostName} className="w-10 h-10 rounded-full object-cover" />
-                      <div className="flex-1">
-                        <p className="text-sm font-semibold">{room.hostName}</p>
-                        <p className="text-xs text-muted-foreground">Host · Age {room.hostAge}</p>
-                      </div>
-                      <Link href="/signup">
-                        <Button size="sm" className="rounded-full text-sm px-4">View</Button>
-                      </Link>
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            ))}
-          </div>
-
-          <motion.div className="text-center mt-12" {...fadeUp(0.3)}>
-            <Link href="/signup">
-              <Button size="lg" className="text-lg rounded-full px-10 shadow-lg shadow-primary/20">
-                Create Free Account to See All Rooms
-              </Button>
-            </Link>
-          </motion.div>
-        </div>
-      </section>
+    <BrowseRoomsSection />
+  </div>
+</section>
 
  {/* ── Real Stories ── */}
 <section className="py-20 lg:py-28 bg-gray-900 overflow-hidden">
