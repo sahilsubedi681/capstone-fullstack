@@ -257,7 +257,7 @@ export function RoomRequestDialog({
             {type === "book" && (
               <div className="space-y-3">
                 <div className="space-y-2">
-                  <Label>Upfront rent</Label>
+                  <Label>Booking Duration</Label>
                   <div className="grid grid-cols-4 gap-2">
                     {RENT_WEEK_OPTIONS.map((weeks) => (
                       <Button
