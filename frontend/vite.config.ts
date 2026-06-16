@@ -21,22 +21,11 @@ export default defineConfig({
   },
   root: path.resolve(__dirname),
   build: {
-    outDir: "dist", // Change this back to default
+    outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
-    // Ensure assets are properly handled
-    rollupOptions: {
-      output: {
-        manualChunks: undefined,
-      },
-    },
   },
   server: {
     port: 5173,
-    host: "0.0.0.0",
-  },
-  // Add preview config for testing
-  preview: {
-    port: 4173,
     host: "0.0.0.0",
   },
 });
