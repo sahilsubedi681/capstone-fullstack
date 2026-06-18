@@ -452,6 +452,14 @@ function HostDashboard({ user }: { user: UserProfile }) {
 
 const handleCreateListing = async (e: React.FormEvent) => {
   e.preventDefault()
+   if (!user.verified) {
+    toast({
+      title: "Profile not verified",
+      description: "You must be verified before creating a listing. Please submit your verification request.",
+      variant: "destructive",
+    })
+    return
+  }
   if (editingId && interestedListingIds.has(editingId)) {
     toast({ title: "Cannot edit listing", description: interestBlockedMessage, variant: "destructive" })
     return
