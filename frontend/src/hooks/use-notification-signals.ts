@@ -44,7 +44,7 @@ export function countUnreadConversations(userId: string, conversations: Conversa
 }
 
 export function countPendingRequests(requests: RoomRequest[]): number {
-  return requests.filter((req) => req.status === "pending").length;
+  return requests.filter((req) => req.status === "pending" || req.status === "refund_requested").length;
 }
 
 export function countUpdatedRequests(userId: string, requests: RoomRequest[], role: "host" | "seeker"): number {

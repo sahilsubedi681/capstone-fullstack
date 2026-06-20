@@ -49,6 +49,14 @@ async function deleteSavedListingsForListing(listingId) {
   await batch.commit()
 }
 
+async function logActivity(type, description) {
+  await db.collection("activity_logs").add({
+    type,
+    description,
+    createdAt: new Date().toISOString(),
+  })
+}
+
 async function hasListingInterests(listingId) {
   const snapshot = await db.collection("interests")
     .where("listingId", "==", listingId)
@@ -171,6 +179,10 @@ router.post("/", verifyToken, upload.array("photos", 5), async (req, res) => {
     }
 
     const ref = await db.collection("listings").add(listing)
+    await logActivity(
+      "room_created",
+      `${userData?.fullName || "Host"} created a new listing: ${listing.suburb}, ${listing.state} for $${listing.rentPerWeek}/week`
+    )
     res.status(201).json({ id: ref.id, ...listing })
   } catch (error) {
     console.error(error)

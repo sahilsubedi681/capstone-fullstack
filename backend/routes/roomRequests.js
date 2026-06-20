@@ -43,6 +43,14 @@ async function sendMessage(senderId, senderName, recipientId, content) {
   })
 }
 
+async function logActivity(type, description) {
+  await db.collection("activity_logs").add({
+    type,
+    description,
+    createdAt: new Date().toISOString(),
+  })
+}
+
 router.get("/", verifyToken, async (req, res) => {
   try {
     const role = req.query.role === "host" ? "host" : "seeker"
@@ -142,6 +150,11 @@ router.post("/", verifyToken, async (req, res) => {
       `Requested a ${typeLabel} for ${listingLabel} on ${scheduledDate} at ${scheduledTime}.${paymentNote}`
     )
 
+    await logActivity(
+      type === "book" ? "room_booking_request" : "room_visit_request",
+      `${payload.seekerName} requested a ${typeLabel} for ${listingLabel} on ${scheduledDate} at ${scheduledTime}`
+    )
+
     res.status(201).json({ request: { id: ref.id, ...payload } })
   } catch (error) {
     console.error(error)
@@ -152,7 +165,7 @@ router.post("/", verifyToken, async (req, res) => {
 router.patch("/:id/status", verifyToken, async (req, res) => {
   try {
     const { status } = req.body
-    const allowed = ["confirmed", "declined", "cancelled"]
+    const allowed = ["confirmed", "declined", "cancelled", "refund_requested", "refunded"]
 
     if (!allowed.includes(status)) {
       return res.status(400).json({ error: "Invalid status" })
@@ -177,8 +190,28 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
       return res.status(403).json({ error: "Only the seeker can cancel a request" })
     }
 
+    if (status === "refund_requested" && !isSeeker) {
+      return res.status(403).json({ error: "Only the seeker can request a refund" })
+    }
+
+    if (status === "refunded" && !isHost) {
+      return res.status(403).json({ error: "Only the host can confirm a refund" })
+    }
+
     if ((status === "confirmed" || status === "declined") && !isHost) {
       return res.status(403).json({ error: "Only the host can confirm or decline a request" })
+    }
+
+    if (status === "refund_requested" && request.type !== "book") {
+      return res.status(400).json({ error: "Refunds can only be requested for bookings" })
+    }
+
+    if (status === "refund_requested" && request.status !== "confirmed") {
+      return res.status(409).json({ error: "Refund can only be requested for a confirmed booking" })
+    }
+
+    if (status === "refunded" && request.status !== "refund_requested") {
+      return res.status(409).json({ error: "Refund confirmation must follow a refund request" })
     }
 
     const previousStatus = request.status
@@ -195,10 +228,23 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
       })
     }
 
+    if (status === "refunded" && request.type === "book") {
+      const listingRef = db.collection("listings").doc(request.listingId)
+      const listingDoc = await listingRef.get()
+      if (listingDoc.exists && listingDoc.data().status === "booked") {
+        await listingRef.update({
+          status: "active",
+          bookedAt: null,
+          bookedBySeekerId: null,
+          bookedRequestId: null,
+        })
+      }
+    }
+
     if (
       request.type === "book" &&
       previousStatus === "confirmed" &&
-      (status === "cancelled" || status === "declined")
+      status === "cancelled"
     ) {
       const listingRef = db.collection("listings").doc(request.listingId)
       const listingDoc = await listingRef.get()
@@ -213,13 +259,24 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
     }
 
     const recipientId = isHost ? request.seekerId : request.hostId
-    const statusLabel = status === "confirmed" ? "confirmed" : status === "declined" ? "declined" : "cancelled"
+    const statusLabel =
+      status === "confirmed"
+        ? "confirmed"
+        : status === "declined"
+        ? "declined"
+        : status === "cancelled"
+        ? "cancelled"
+        : status === "refund_requested"
+        ? "marked for refund"
+        : "refunded"
     const userSnap = await db.collection("users").doc(req.user.uid).get()
     const actorName = userSnap.data()?.fullName || "User"
 
     const bookingNote =
       status === "confirmed" && request.type === "book"
         ? " The room is now marked as booked."
+        : status === "refunded"
+        ? " The booking has been refunded and the room is available again for seekers."
         : ""
 
     await sendMessage(
@@ -228,6 +285,41 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
       recipientId,
       `Your ${request.listingLabel} request has been ${statusLabel}.${bookingNote}`
     )
+
+    if (status === "confirmed") {
+      await logActivity(
+        request.type === "book" ? "booking_confirmed" : "visit_confirmed",
+        `${actorName} confirmed ${request.type === "book" ? "booking" : "visit"} for ${request.listingLabel}`
+      )
+    }
+
+    if (status === "refund_requested") {
+      await logActivity(
+        "refund_requested",
+        `${actorName} requested a refund for ${request.listingLabel}`
+      )
+    }
+
+    if (status === "refunded") {
+      await logActivity(
+        "refunded",
+        `${actorName} confirmed refund for ${request.listingLabel}`
+      )
+    }
+
+    if (status === "declined") {
+      await logActivity(
+        "request_declined",
+        `${actorName} declined the request for ${request.listingLabel}`
+      )
+    }
+
+    if (status === "cancelled") {
+      await logActivity(
+        "request_cancelled",
+        `${actorName} cancelled the request for ${request.listingLabel}`
+      )
+    }
 
     res.json({ request: { id: snap.id, ...request, status, updatedAt: now } })
   } catch (error) {

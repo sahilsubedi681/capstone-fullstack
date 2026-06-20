@@ -40,15 +40,22 @@ router.get("/stats", async (req, res) => {
 
 router.get("/users", async (req, res) => {
   try {
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 10))
+
     const snapshot = await db.collection("users").get()
-    const users = snapshot.docs
+    const sortedUsers = snapshot.docs
       .map((doc) => ({ uid: doc.id, ...doc.data() }))
       .sort((a, b) => {
         const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0
         const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0
         return bTime - aTime
       })
-    res.json({ users })
+    const total = sortedUsers.length
+    const start = (page - 1) * pageSize
+    const users = sortedUsers.slice(start, start + pageSize)
+
+    res.json({ users, total })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: "Failed to load users" })
@@ -137,15 +144,21 @@ router.patch("/users/:uid/status", async (req, res) => {
 
 router.get("/listings", async (req, res) => {
   try {
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 10))
+
     const snapshot = await db.collection("listings").get()
-    const listings = snapshot.docs
+    const sortedListings = snapshot.docs
       .map((doc) => ({ id: doc.id, ...doc.data() }))
       .sort((a, b) => {
         const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0
         const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0
         return bTime - aTime
       })
-    res.json({ listings })
+    const total = sortedListings.length
+    const listings = sortedListings.slice((page - 1) * pageSize, page * pageSize)
+
+    res.json({ listings, total })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: "Failed to load listings" })
@@ -177,14 +190,19 @@ router.patch("/listings/:id/status", async (req, res) => {
 
 router.get("/activity", async (req, res) => {
   try {
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 10))
+
     const snapshot = await db
       .collection("activity_logs")
       .orderBy("createdAt", "desc")
-      .limit(50)
       .get()
 
-    const activities = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
-    res.json({ activities })
+    const sortedActivities = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+    const total = sortedActivities.length
+    const activities = sortedActivities.slice((page - 1) * pageSize, page * pageSize)
+
+    res.json({ activities, total })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: "Failed to load activity" })

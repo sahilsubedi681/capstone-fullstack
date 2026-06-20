@@ -30,6 +30,8 @@ const statusStyles: Record<RoomRequest["status"], string> = {
   confirmed: "bg-green-500/15 text-green-700",
   declined: "bg-red-500/15 text-red-700",
   cancelled: "bg-muted text-muted-foreground",
+  refund_requested: "bg-orange-500/15 text-orange-700",
+  refunded: "bg-slate-500/15 text-slate-700",
 };
 
 function isRequestNew(userId: string, request: RoomRequest, role: "host" | "seeker"): boolean {
@@ -71,7 +73,7 @@ export function RoomRequestsPanel({ user, role, onUpdate }: RoomRequestsPanelPro
 
   const handleStatusUpdate = async (
     request: RoomRequest,
-    status: "confirmed" | "declined" | "cancelled"
+    status: "confirmed" | "declined" | "cancelled" | "refund_requested" | "refunded"
   ) => {
     setUpdatingId(request.id);
     try {
@@ -84,7 +86,8 @@ export function RoomRequestsPanel({ user, role, onUpdate }: RoomRequestsPanelPro
         recipientId,
         request.listingLabel
       );
-      toast({ title: `Request ${status}` });
+      const label = status === "refund_requested" ? "Refund requested" : status === "refunded" ? "Refund confirmed" : `Request ${status}`;
+      toast({ title: label });
       onUpdate?.();
     } catch {
       toast({ title: "Failed to update request", variant: "destructive" });
@@ -155,7 +158,7 @@ export function RoomRequestsPanel({ user, role, onUpdate }: RoomRequestsPanelPro
                   )}
                 </div>
                 <Badge className={`${statusStyles[request.status]} border-none capitalize`}>
-                  {request.status}
+                  {request.status === "refund_requested" ? "Refund requested" : request.status === "refunded" ? "Refunded" : request.status}
                 </Badge>
               </div>
 
@@ -213,6 +216,18 @@ export function RoomRequestsPanel({ user, role, onUpdate }: RoomRequestsPanelPro
                       Cancel Request
                     </Button>
                   )}
+                </div>
+              )}
+              {request.status === "refund_requested" && role === "host" && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    className="rounded-lg border border-orange-500 text-orange-700"
+                    disabled={updatingId === request.id}
+                    onClick={() => handleStatusUpdate(request, "refunded")}
+                  >
+                    Confirm Refund
+                  </Button>
                 </div>
               )}
             </CardContent>

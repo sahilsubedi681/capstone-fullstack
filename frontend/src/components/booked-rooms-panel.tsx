@@ -2,12 +2,16 @@ import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Calendar, CreditCard, Home, MapPin, User } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Calendar, CreditCard, Home, Loader2, MapPin, User } from "lucide-react";
 import {
   getSeekerBookedRooms,
   subscribeToBookedRooms,
+  updateRoomRequestStatus,
   type BookedRoom,
+  type RoomRequest,
 } from "@/lib/firestore";
+import { useToast } from "@/hooks/use-toast";
 import type { UserProfile } from "@/lib/auth";
 
 interface BookedRoomsPanelProps {
@@ -18,11 +22,14 @@ interface BookedRoomsPanelProps {
 const statusStyles: Record<string, string> = {
   pending: "bg-amber-500/15 text-amber-700",
   confirmed: "bg-green-500/15 text-green-700",
+  refund_requested: "bg-orange-500/15 text-orange-700",
 };
 
 export function BookedRoomsPanel({ user, onCountChange }: BookedRoomsPanelProps) {
   const [bookedRooms, setBookedRooms] = useState<BookedRoom[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refundingId, setRefundingId] = useState<string | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     const unsubscribe = subscribeToBookedRooms(user.uid, (rooms) => {
@@ -69,11 +76,31 @@ export function BookedRoomsPanel({ user, onCountChange }: BookedRoomsPanelProps)
     );
   }
 
+  const handleRequestRefund = async (request: RoomRequest) => {
+    setRefundingId(request.id);
+    try {
+      await updateRoomRequestStatus(request.id, "refund_requested", user.uid, user.fullName, request.hostId, request.listingLabel);
+      toast({
+        title: "Refund requested",
+        description: "The host has been notified and will confirm the refund.",
+      });
+    } catch {
+      toast({ title: "Refund request failed", variant: "destructive" });
+    } finally {
+      setRefundingId(null);
+    }
+  };
+
   return (
     <div className="grid md:grid-cols-2 gap-6">
       {bookedRooms.map(({ request, listing }) => {
         const photo = listing?.photoUrls?.[0] || listing?.photoUrl;
-        const statusLabel = request.status === "confirmed" ? "Booked" : "Awaiting Host Confirmation";
+        const statusLabel =
+          request.status === "confirmed"
+            ? "Booked"
+            : request.status === "refund_requested"
+            ? "Refund requested"
+            : "Awaiting Host Confirmation";
 
         return (
           <Card key={request.id} className="rounded-2xl border-border/50 overflow-hidden flex flex-col">
@@ -144,6 +171,30 @@ export function BookedRoomsPanel({ user, onCountChange }: BookedRoomsPanelProps)
                       Paid on {new Date(request.paidAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}
                     </p>
                   )}
+                </div>
+              )}
+
+              {request.status === "confirmed" && (
+                <div className="mt-4">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full rounded-lg"
+                    disabled={refundingId === request.id}
+                    onClick={() => handleRequestRefund(request)}
+                  >
+                    {refundingId === request.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      "Request Refund"
+                    )}
+                  </Button>
+                </div>
+              )}
+
+              {request.status === "refund_requested" && (
+                <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-3 text-sm text-orange-800 mt-4">
+                  Refund has been requested. Waiting for host confirmation.
                 </div>
               )}
 

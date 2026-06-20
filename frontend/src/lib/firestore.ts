@@ -452,7 +452,7 @@ export function subscribeToMessages(
 // ─── Room Requests (Visit / Book) ─────────────────────────────────────────────
 
 export type RoomRequestType = "visit" | "book";
-export type RoomRequestStatus = "pending" | "confirmed" | "declined" | "cancelled";
+export type RoomRequestStatus = "pending" | "confirmed" | "declined" | "cancelled" | "refund_requested" | "refunded";
 
 export type PaymentStatus = "paid";
 
@@ -489,7 +489,8 @@ function isPaidBooking(request: RoomRequest): boolean {
     request.type === "book" &&
     request.paymentStatus === "paid" &&
     request.status !== "cancelled" &&
-    request.status !== "declined"
+    request.status !== "declined" &&
+    request.status !== "refunded"
   );
 }
 
@@ -583,7 +584,18 @@ export async function updateRoomRequestStatus(
 
 export interface ActivityLog {
   id: string;
-  type: "signup" | "new_listing" | "report";
+  type:
+    | "signup"
+    | "new_listing"
+    | "room_visit_request"
+    | "room_booking_request"
+    | "booking_confirmed"
+    | "visit_confirmed"
+    | "refund_requested"
+    | "refunded"
+    | "request_declined"
+    | "request_cancelled"
+    | "report";
   description: string;
   createdAt: string;
 }

@@ -206,7 +206,7 @@ export const roomRequestsApi = {
       body: JSON.stringify(data),
     }),
 
-  updateStatus: (id: string, status: "confirmed" | "declined" | "cancelled") =>
+  updateStatus: (id: string, status: "confirmed" | "declined" | "cancelled" | "refund_requested" | "refunded") =>
     apiFetch(`/room-requests/${id}/status`, {
       method: "PATCH",
       body: JSON.stringify({ status }),
@@ -278,12 +278,25 @@ export interface AdminActivity {
   createdAt: string
 }
 
+export interface AdminPagedResponse<T> {
+  items: T[]
+  total: number
+}
+
 export const adminApi = {
   getStats: (): Promise<AdminStats> => apiFetch("/admin/stats"),
 
-  getUsers: async (): Promise<AdminUser[]> => {
-    const response = await apiFetch("/admin/users")
-    return response.users || []
+  getUsers: async (
+    page = 1,
+    pageSize = 10
+  ): Promise<AdminPagedResponse<AdminUser>> => {
+    const response = await apiFetch(
+      `/admin/users?page=${page}&pageSize=${pageSize}`
+    )
+    return {
+      items: response.users || [],
+      total: typeof response.total === "number" ? response.total : 0,
+    }
   },
 
   getUserDetails: (uid: string): Promise<AdminUserDetails> =>
@@ -301,9 +314,17 @@ export const adminApi = {
       body: JSON.stringify({ status }),
     }),
 
-  getListings: async (): Promise<AdminListing[]> => {
-    const response = await apiFetch("/admin/listings")
-    return response.listings || []
+  getListings: async (
+    page = 1,
+    pageSize = 10
+  ): Promise<AdminPagedResponse<AdminListing>> => {
+    const response = await apiFetch(
+      `/admin/listings?page=${page}&pageSize=${pageSize}`
+    )
+    return {
+      items: response.listings || [],
+      total: typeof response.total === "number" ? response.total : 0,
+    }
   },
 
   updateListingStatus: (id: string, status: "active" | "removed") =>
@@ -312,8 +333,16 @@ export const adminApi = {
       body: JSON.stringify({ status }),
     }),
 
-  getActivity: async (): Promise<AdminActivity[]> => {
-    const response = await apiFetch("/admin/activity")
-    return response.activities || []
+  getActivity: async (
+    page = 1,
+    pageSize = 10
+  ): Promise<AdminPagedResponse<AdminActivity>> => {
+    const response = await apiFetch(
+      `/admin/activity?page=${page}&pageSize=${pageSize}`
+    )
+    return {
+      items: response.activities || [],
+      total: typeof response.total === "number" ? response.total : 0,
+    }
   },
 }

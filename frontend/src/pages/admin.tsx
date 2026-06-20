@@ -22,6 +22,16 @@ import {
 } from "@/lib/api";
 import { Users, Home, Activity, CheckCircle, DoorOpen, CalendarCheck, ShieldCheck, ShieldX, Eye } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationPrevious,
+  PaginationNext,
+} from "@/components/ui/pagination";
+
+const PAGE_SIZE = 8
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -34,8 +44,16 @@ export default function AdminDashboard() {
 function AdminContent() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [usersPage, setUsersPage] = useState(1);
+
   const [listings, setListings] = useState<AdminListing[]>([]);
+  const [listingsTotal, setListingsTotal] = useState(0);
+  const [listingsPage, setListingsPage] = useState(1);
+
   const [activities, setActivities] = useState<AdminActivity[]>([]);
+  const [activitiesTotal, setActivitiesTotal] = useState(0);
+  const [activitiesPage, setActivitiesPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -46,21 +64,57 @@ function AdminContent() {
   useEffect(() => {
     Promise.all([
       adminApi.getStats(),
-      adminApi.getUsers(),
-      adminApi.getListings(),
-      adminApi.getActivity(),
+      adminApi.getUsers(usersPage, PAGE_SIZE),
+      adminApi.getListings(listingsPage, PAGE_SIZE),
+      adminApi.getActivity(activitiesPage, PAGE_SIZE),
     ])
       .then(([s, u, l, a]) => {
         setStats(s);
-        setUsers(u);
-        setListings(l);
-        setActivities(a);
+        setUsers(u.items);
+        setUsersTotal(u.total);
+        setListings(l.items);
+        setListingsTotal(l.total);
+        setActivities(a.items);
+        setActivitiesTotal(a.total);
       })
       .catch(() => {
         toast({ title: "Failed to load admin data", variant: "destructive" });
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    adminApi.getUsers(usersPage, PAGE_SIZE)
+      .then((result) => {
+        setUsers(result.items)
+        setUsersTotal(result.total)
+      })
+      .catch(() => {
+        toast({ title: "Failed to load users", variant: "destructive" })
+      })
+  }, [usersPage])
+
+  useEffect(() => {
+    adminApi.getListings(listingsPage, PAGE_SIZE)
+      .then((result) => {
+        setListings(result.items)
+        setListingsTotal(result.total)
+      })
+      .catch(() => {
+        toast({ title: "Failed to load listings", variant: "destructive" })
+      })
+  }, [listingsPage])
+
+  useEffect(() => {
+    adminApi.getActivity(activitiesPage, PAGE_SIZE)
+      .then((result) => {
+        setActivities(result.items)
+        setActivitiesTotal(result.total)
+      })
+      .catch(() => {
+        toast({ title: "Failed to load activity", variant: "destructive" })
+      })
+  }, [activitiesPage])
 
   const handleUserStatus = async (uid: string, status: "active" | "suspended") => {
     setActionLoading(`status-${uid}`);
@@ -157,107 +211,115 @@ function AdminContent() {
               {loading ? (
                 <div className="space-y-4"><Skeleton className="h-10" /><Skeleton className="h-10" /><Skeleton className="h-10" /></div>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead>Verified</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Date Joined</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {users.map((u) => (
-                        <TableRow key={u.uid} data-testid={`row-user-${u.uid}`}>
-                          <TableCell className="font-medium">{u.fullName}</TableCell>
-                          <TableCell className="capitalize">{u.role}</TableCell>
-                          <TableCell>
-                            {u.verified ? (
-                              <Badge className="bg-green-600 hover:bg-green-600">
-                                <ShieldCheck className="h-3 w-3 mr-1" />
-                                Verified
-                              </Badge>
-                            ) : u.verificationStatus === "pending" ? (
-                              <Badge variant="secondary">Pending</Badge>
-                            ) : (
-                              <Badge variant="outline">
-                                <ShieldX className="h-3 w-3 mr-1" />
-                                Unverified
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={u.status === "active" ? "default" : "secondary"} className={u.status === "active" ? "bg-primary hover:bg-primary" : ""}>
-                              {u.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {u.createdAt ? new Date(u.createdAt).toLocaleDateString("en-AU") : "—"}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                data-testid={`button-view-details-${u.uid}`}
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleViewDetails(u.uid)}
-                              >
-                                <Eye className="h-3.5 w-3.5 mr-1" />
-                                View Details
-                              </Button>
-                              {u.verified ? (
-                                <Button
-                                  data-testid={`button-unverify-${u.uid}`}
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={actionLoading === `verify-${u.uid}`}
-                                  onClick={() => handleVerify(u.uid, false)}
-                                >
-                                  Unverify
-                                </Button>
-                              ) : (
-                                <Button
-                                  data-testid={`button-verify-${u.uid}`}
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={actionLoading === `verify-${u.uid}`}
-                                  onClick={() => handleVerify(u.uid, true)}
-                                >
-                                  Verify
-                                </Button>
-                              )}
-                              {u.status === "active" ? (
-                                <Button
-                                  data-testid={`button-suspend-${u.uid}`}
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-destructive hover:text-destructive"
-                                  disabled={actionLoading === `status-${u.uid}`}
-                                  onClick={() => handleUserStatus(u.uid, "suspended")}
-                                >
-                                  Suspend
-                                </Button>
-                              ) : (
-                                <Button
-                                  data-testid={`button-approve-${u.uid}`}
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={actionLoading === `status-${u.uid}`}
-                                  onClick={() => handleUserStatus(u.uid, "active")}
-                                >
-                                  Approve
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
+                <>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead>Verified</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Date Joined</TableHead>
+                          <TableHead>Actions</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                      </TableHeader>
+                      <TableBody>
+                        {users.map((u) => (
+                          <TableRow key={u.uid} data-testid={`row-user-${u.uid}`}>
+                            <TableCell className="font-medium">{u.fullName}</TableCell>
+                            <TableCell className="capitalize">{u.role}</TableCell>
+                            <TableCell>
+                              {u.verified ? (
+                                <Badge className="bg-green-600 hover:bg-green-600">
+                                  <ShieldCheck className="h-3 w-3 mr-1" />
+                                  Verified
+                                </Badge>
+                              ) : u.verificationStatus === "pending" ? (
+                                <Badge variant="secondary">Pending</Badge>
+                              ) : (
+                                <Badge variant="outline">
+                                  <ShieldX className="h-3 w-3 mr-1" />
+                                  Unverified
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={u.status === "active" ? "default" : "secondary"} className={u.status === "active" ? "bg-primary hover:bg-primary" : ""}>
+                                {u.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {u.createdAt ? new Date(u.createdAt).toLocaleDateString("en-AU") : "—"}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  data-testid={`button-view-details-${u.uid}`}
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleViewDetails(u.uid)}
+                                >
+                                  <Eye className="h-3.5 w-3.5 mr-1" />
+                                  View Details
+                                </Button>
+                                {u.verified ? (
+                                  <Button
+                                    data-testid={`button-unverify-${u.uid}`}
+                                    variant="ghost"
+                                    size="sm"
+                                    disabled={actionLoading === `verify-${u.uid}`}
+                                    onClick={() => handleVerify(u.uid, false)}
+                                  >
+                                    Unverify
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    data-testid={`button-verify-${u.uid}`}
+                                    variant="ghost"
+                                    size="sm"
+                                    disabled={actionLoading === `verify-${u.uid}`}
+                                    onClick={() => handleVerify(u.uid, true)}
+                                  >
+                                    Verify
+                                  </Button>
+                                )}
+                                {u.status === "active" ? (
+                                  <Button
+                                    data-testid={`button-suspend-${u.uid}`}
+                                    variant="ghost"
+                                    size="sm"
+                                    className="text-destructive hover:text-destructive"
+                                    disabled={actionLoading === `status-${u.uid}`}
+                                    onClick={() => handleUserStatus(u.uid, "suspended")}
+                                  >
+                                    Suspend
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    data-testid={`button-approve-${u.uid}`}
+                                    variant="ghost"
+                                    size="sm"
+                                    disabled={actionLoading === `status-${u.uid}`}
+                                    onClick={() => handleUserStatus(u.uid, "active")}
+                                  >
+                                    Approve
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <PaginationControls
+                    page={usersPage}
+                    pageSize={PAGE_SIZE}
+                    total={usersTotal}
+                    onPageChange={setUsersPage}
+                  />
+                </>
               )}
             </CardContent>
           </Card>
@@ -268,56 +330,64 @@ function AdminContent() {
               {loading ? (
                 <div className="space-y-4"><Skeleton className="h-10" /><Skeleton className="h-10" /><Skeleton className="h-10" /></div>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Host</TableHead>
-                        <TableHead>Location</TableHead>
-                        <TableHead>Rent</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {listings.map((l) => (
-                        <TableRow key={l.id} data-testid={`row-listing-${l.id}`}>
-                          <TableCell className="font-medium">{l.hostName}</TableCell>
-                          <TableCell>{l.suburb}, {l.state}</TableCell>
-                          <TableCell>${l.rentPerWeek}/wk</TableCell>
-                          <TableCell>
-                            <Badge variant={l.status === "active" ? "default" : "secondary"} className={l.status === "active" ? "bg-primary hover:bg-primary" : ""}>
-                              {l.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {l.status !== "removed" ? (
-                              <Button
-                                data-testid={`button-remove-listing-${l.id}`}
-                                variant="ghost"
-                                size="sm"
-                                className="text-destructive hover:text-destructive"
-                                disabled={actionLoading === `listing-${l.id}`}
-                                onClick={() => handleListingStatus(l.id, "removed")}
-                              >
-                                Remove
-                              </Button>
-                            ) : (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                disabled={actionLoading === `listing-${l.id}`}
-                                onClick={() => handleListingStatus(l.id, "active")}
-                              >
-                                Restore
-                              </Button>
-                            )}
-                          </TableCell>
+                <>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Host</TableHead>
+                          <TableHead>Location</TableHead>
+                          <TableHead>Rent</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Actions</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                      </TableHeader>
+                      <TableBody>
+                        {listings.map((l) => (
+                          <TableRow key={l.id} data-testid={`row-listing-${l.id}`}>
+                            <TableCell className="font-medium">{l.hostName}</TableCell>
+                            <TableCell>{l.suburb}, {l.state}</TableCell>
+                            <TableCell>${l.rentPerWeek}/wk</TableCell>
+                            <TableCell>
+                              <Badge variant={l.status === "active" ? "default" : "secondary"} className={l.status === "active" ? "bg-primary hover:bg-primary" : ""}>
+                                {l.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {l.status !== "removed" ? (
+                                <Button
+                                  data-testid={`button-remove-listing-${l.id}`}
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={actionLoading === `listing-${l.id}`}
+                                  onClick={() => handleListingStatus(l.id, "removed")}
+                                >
+                                  Remove
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={actionLoading === `listing-${l.id}`}
+                                  onClick={() => handleListingStatus(l.id, "active")}
+                                >
+                                  Restore
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <PaginationControls
+                    page={listingsPage}
+                    pageSize={PAGE_SIZE}
+                    total={listingsTotal}
+                    onPageChange={setListingsPage}
+                  />
+                </>
               )}
             </CardContent>
           </Card>
@@ -331,26 +401,42 @@ function AdminContent() {
             ) : activities.length === 0 ? (
               <p className="text-muted-foreground text-center py-4">No recent activity found.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead>Date</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {activities.map((a) => (
-                      <TableRow key={a.id} data-testid={`row-activity-${a.id}`}>
-                        <TableCell className="capitalize font-medium">{a.type.replace("_", " ")}</TableCell>
-                        <TableCell>{a.description}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{new Date(a.createdAt).toLocaleDateString("en-AU")}</TableCell>
+              <>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Time</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {activities.map((a) => (
+                        <TableRow key={a.id} data-testid={`row-activity-${a.id}`}>
+                          <TableCell className="capitalize font-medium">
+                            {a.type.replace(/_/g, " ")}
+                          </TableCell>
+                          <TableCell>{a.description}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(a.createdAt).toLocaleDateString("en-AU")}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(a.createdAt).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <PaginationControls
+                  page={activitiesPage}
+                  pageSize={PAGE_SIZE}
+                  total={activitiesTotal}
+                  onPageChange={setActivitiesPage}
+                />
+              </>
             )}
           </CardContent>
         </Card>
@@ -364,6 +450,56 @@ function AdminContent() {
       </div>
     </div>
   );
+}
+
+function PaginationControls({
+  page,
+  pageSize,
+  total,
+  onPageChange,
+}: {
+  page: number
+  pageSize: number
+  total: number
+  onPageChange: (page: number) => void
+}) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const startItem = (page - 1) * pageSize + 1
+  const endItem = Math.min(total, page * pageSize)
+
+  return (
+    <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <p className="text-sm text-muted-foreground">
+        Showing {startItem}–{endItem} of {total}
+      </p>
+      <Pagination className="w-full md:w-auto">
+        <PaginationContent>
+          <PaginationItem>
+            <PaginationPrevious
+              disabled={page <= 1}
+              onClick={() => onPageChange(Math.max(1, page - 1))}
+            />
+          </PaginationItem>
+          {Array.from({ length: pageCount }, (_, index) => index + 1).map((pageNumber) => (
+            <PaginationItem key={pageNumber}>
+              <PaginationLink
+                isActive={pageNumber === page}
+                onClick={() => onPageChange(pageNumber)}
+              >
+                {pageNumber}
+              </PaginationLink>
+            </PaginationItem>
+          ))}
+          <PaginationItem>
+            <PaginationNext
+              disabled={page >= pageCount}
+              onClick={() => onPageChange(Math.min(pageCount, page + 1))}
+            />
+          </PaginationItem>
+        </PaginationContent>
+      </Pagination>
+    </div>
+  )
 }
 
 function DetailRow({ label, value }: { label: string; value?: string | number | null }) {
